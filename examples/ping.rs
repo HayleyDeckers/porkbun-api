@@ -5,5 +5,7 @@ async fn main() -> anyhow::Result<()> {
     let client = porkbun_api::Client::new(api_key);
     let ping_response = client.ping().await?;
     println!("{ping_response:#?}");
+    let ping_response = client.ping_v4().await?;
+    println!("{ping_response:#?}");
     Ok(())
 }

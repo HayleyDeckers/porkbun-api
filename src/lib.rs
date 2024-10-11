@@ -10,7 +10,12 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, net::IpAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    fmt::Display,
+    net::{IpAddr, Ipv4Addr},
+    sync::Arc,
+};
 
 #[derive(Deserialize, Serialize)]
 pub struct ApiKey {
@@ -93,12 +98,21 @@ pub struct DnsRecordsByDomainOrIDResponse {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct PingResponse {
+struct PingResponse {
     your_ip: IpAddr,
 }
+
 #[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct DeleteDnsRecordByIdResponse {}
+pub struct Pricing {
+    registration: String,
+    renewal: String,
+    transfer: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct DomainPricingResponse {
+    pricing: HashMap<String, Pricing>,
+}
 
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
@@ -111,6 +125,17 @@ struct WithApiKeys<'a, T: Serialize> {
 mod uri {
     pub const fn ping() -> &'static str {
         "https://api.porkbun.com/api/json/v3/ping"
+    }
+
+    // note: the docs say
+    // > The dedicated IPv4 hostname is api-ipv4.porkbun.com, use this instead of porkbun.com.
+    // which would yield api.api-ipv4.porkbun.com but that's obviously wrong so we don't do that
+    pub const fn ping_v4() -> &'static str {
+        "https://api-ipv4.porkbun.com/api/json/v3/ping"
+    }
+
+    pub const fn domain_pricing() -> &'static str {
+        "https://api.porkbun.com/api/json/v3/pricing/get"
     }
 
     pub fn create_dns_record(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
@@ -167,6 +192,35 @@ impl Client {
         Ok(ping.your_ip)
     }
 
+    pub async fn ping_v4(&self) -> Result<Ipv4Addr> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PingV4Response {
+            your_ip: Ipv4Addr,
+            //nxForwardedFor is returned here too?
+        }
+        let resp = self
+            .inner
+            .post_with_api_keys(hyper::Uri::from_static(uri::ping_v4()), ())
+            .await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let ping: PingV4Response =
+            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(ping.your_ip)
+    }
+
+    //note: does not require authentication
+    pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>> {
+        let resp = self
+            .inner
+            .post(hyper::Uri::from_static(uri::domain_pricing()), ())
+            .await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let resp: DomainPricingResponse =
+            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(resp.pricing)
+    }
+
     pub async fn make_dns_record(
         &self,
         domain: &str,
@@ -183,11 +237,7 @@ impl Client {
             .map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub async fn delete_dns_record_by_id(
-        &self,
-        domain: &str,
-        id: u128,
-    ) -> Result<DeleteDnsRecordByIdResponse> {
+    pub async fn delete_dns_record_by_id(&self, domain: &str, id: u128) -> Result<()> {
         let resp = self
             .inner
             .post_with_api_keys(uri::delete_dns_record_by_id(domain, id)?, ())
