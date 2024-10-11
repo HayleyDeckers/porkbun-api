@@ -10,12 +10,41 @@ use hyper_util::{
     rt::TokioExecutor,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::{fmt::Display, net::IpAddr, sync::Arc};
 
 #[derive(Deserialize, Serialize)]
 pub struct ApiKey {
     secretapikey: String,
     apikey: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ApiError {
+    message: String,
+}
+
+impl Display for ApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
+impl std::error::Error for ApiError {}
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "status", rename_all = "UPPERCASE")]
+enum ApiResponse<T> {
+    Success(T),
+    Error(ApiError),
+}
+
+impl<T> From<ApiResponse<T>> for Result<T, ApiError> {
+    fn from(value: ApiResponse<T>) -> Self {
+        match value {
+            ApiResponse::Success(s) => Ok(s),
+            ApiResponse::Error(e) => Err(e),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -32,7 +61,7 @@ pub enum DnsRecordType {
     CAA,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Serialize)]
 pub struct CreateDnsRecord {
     #[serde(rename = "name")]
     pub subdomain: Option<String>,
@@ -41,15 +70,13 @@ pub struct CreateDnsRecord {
     pub content: String,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct CreateDnsRecordResponse {
-    status: String,
     // this id is a string in the example docs, but the api returns an integer
     pub id: Option<u128>,
-    message: Option<String>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct DnsEntry {
     id: String,
     #[serde(rename = "name")]
@@ -59,26 +86,19 @@ pub struct DnsEntry {
     pub content: String,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Debug)]
 pub struct DnsRecordsByDomainOrIDResponse {
-    status: String,
-    message: Option<String>,
     pub records: Vec<DnsEntry>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct PingResponse {
-    status: String,
-    your_ip: Option<String>,
-    message: Option<String>,
+    your_ip: IpAddr,
 }
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct DeleteDnsRecordByIdResponse {
-    status: String,
-    message: Option<String>,
-}
+pub struct DeleteDnsRecordByIdResponse {}
 
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
@@ -136,7 +156,7 @@ impl Client {
         }
     }
 
-    pub async fn ping(&self) -> Result<PingResponse> {
+    pub async fn ping(&self) -> Result<IpAddr> {
         let resp = self
             .inner
             .post_with_api_keys(
@@ -145,7 +165,9 @@ impl Client {
             )
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
-        serde_json::from_slice(&bytes).map_err(|e| anyhow::anyhow!(e))
+        let ping: PingResponse =
+            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(ping.your_ip)
     }
 
     pub async fn make_dns_record(
@@ -166,7 +188,8 @@ impl Client {
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
         println!("{body}");
-        serde_json::from_slice(body.as_bytes()).map_err(|e| anyhow::anyhow!(e))
+        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub async fn delete_dns_record_by_id(
@@ -184,7 +207,8 @@ impl Client {
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
         println!("{body}");
-        serde_json::from_slice(body.as_bytes()).map_err(|e| anyhow::anyhow!(e))
+        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 
     pub async fn get_dns_record_by_domain_and_id(
@@ -202,7 +226,8 @@ impl Client {
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
         println!("{body}");
-        serde_json::from_slice(body.as_bytes()).map_err(|e| anyhow::anyhow!(e))
+        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
+            .map_err(|e| anyhow::anyhow!(e))
     }
 }
 
