@@ -136,6 +136,11 @@ struct DomainPricingResponse {
 }
 
 #[derive(Serialize)]
+struct UpdateNameServers {
+    ns: Vec<String>,
+}
+
+#[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
     #[serde(flatten)]
     api_keys: &'a ApiKey,
@@ -157,6 +162,12 @@ mod uri {
 
     pub const fn domain_pricing() -> &'static str {
         "https://api.porkbun.com/api/json/v3/pricing/get"
+    }
+
+    pub fn update_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(&format!(
+            "https://api.porkbun.com/api/json/v3/domain/updateNs/{domain}"
+        ))
     }
 
     pub fn create_dns_record(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
@@ -240,6 +251,23 @@ impl Client {
         let resp: DomainPricingResponse =
             Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(resp.pricing)
+    }
+
+    pub async fn update_ns_for_domain(
+        &self,
+        domain: String,
+        name_servers: Vec<String>,
+    ) -> Result<()> {
+        let resp = self
+            .inner
+            .post_with_api_keys(
+                uri::update_name_servers(&domain)?,
+                UpdateNameServers { ns: name_servers },
+            )
+            .await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let resp = Result::<(), ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(resp)
     }
 
     pub async fn make_dns_record(
