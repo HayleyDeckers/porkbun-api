@@ -146,23 +146,20 @@ mod uri {
 
 #[derive(Clone)]
 pub struct Client {
-    inner: Arc<ClientInner>,
+    inner: ClientInner,
 }
 
 impl Client {
     pub fn new(api_key: ApiKey) -> Self {
         Self {
-            inner: Arc::new(ClientInner::new(api_key)),
+            inner: ClientInner::new(Arc::new(api_key)),
         }
     }
 
     pub async fn ping(&self) -> Result<IpAddr> {
         let resp = self
             .inner
-            .post_with_api_keys(
-                hyper::Uri::from_static(uri::ping()),
-                Some(&self.inner.api_keys),
-            )
+            .post_with_api_keys(hyper::Uri::from_static(uri::ping()), ())
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
         let ping: PingResponse =
@@ -177,13 +174,7 @@ impl Client {
     ) -> Result<CreateDnsRecordResponse> {
         let resp = self
             .inner
-            .post_with_api_keys(
-                uri::create_dns_record(domain)?,
-                Some(WithApiKeys {
-                    api_keys: &self.inner.api_keys,
-                    inner: cmd,
-                }),
-            )
+            .post_with_api_keys(uri::create_dns_record(domain)?, cmd)
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
@@ -199,10 +190,7 @@ impl Client {
     ) -> Result<DeleteDnsRecordByIdResponse> {
         let resp = self
             .inner
-            .post_with_api_keys(
-                uri::delete_dns_record_by_id(domain, id)?,
-                Some(&self.inner.api_keys),
-            )
+            .post_with_api_keys(uri::delete_dns_record_by_id(domain, id)?, ())
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
@@ -218,10 +206,7 @@ impl Client {
     ) -> Result<DnsRecordsByDomainOrIDResponse> {
         let resp = self
             .inner
-            .post_with_api_keys(
-                uri::get_dns_record_by_domain_and_id(domain, id)?,
-                Some(&self.inner.api_keys),
-            )
+            .post(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
         let body = std::str::from_utf8(&bytes)?;
@@ -231,33 +216,39 @@ impl Client {
     }
 }
 
+#[derive(Clone)]
 struct ClientInner {
-    api_keys: ApiKey,
+    api_keys: Arc<ApiKey>,
     hyper: HyperClient<hyper_tls::HttpsConnector<HttpConnector>, http_body_util::Full<Bytes>>,
 }
 
 impl ClientInner {
-    pub(crate) fn new(api_keys: ApiKey) -> Self {
+    pub(crate) fn new(api_keys: Arc<ApiKey>) -> Self {
         Self {
             api_keys,
             hyper: HyperClient::builder(TokioExecutor::new()).build(HttpsConnector::new()),
         }
     }
 
-    pub(crate) async fn post_with_api_keys<T: Serialize>(
-        &self,
-        uri: Uri,
-        body: Option<T>,
-    ) -> Result<Response<Incoming>> {
-        let req = Request::post(uri).body(
-            body.map(|b| {
-                http_body_util::Full::new(Bytes::from(serde_json::to_string(&b).unwrap()))
-            })
-            .unwrap_or_default(),
-        )?;
+    pub(crate) async fn post<T: Serialize>(&self, uri: Uri, body: T) -> Result<Response<Incoming>> {
+        let req = Request::post(uri).body(http_body_util::Full::new(Bytes::from(
+            serde_json::to_string(&body).unwrap(),
+        )))?;
         self.hyper
             .request(req)
             .await
             .map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub(crate) async fn post_with_api_keys<T: Serialize>(
+        &self,
+        uri: Uri,
+        body: T,
+    ) -> Result<Response<Incoming>> {
+        let with_api_keys = WithApiKeys {
+            api_keys: &self.api_keys,
+            inner: body,
+        };
+        self.post(uri, with_api_keys).await
     }
 }
