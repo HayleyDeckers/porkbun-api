@@ -101,12 +101,33 @@ pub struct DnsRecordsByDomainOrIDResponse {
 struct PingResponse {
     your_ip: IpAddr,
 }
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum SpecialType {
+    Handshake,
+    Other(String),
+}
 
 #[derive(Deserialize, Debug)]
+#[serde(deny_unknown_fields)]
+#[allow(dead_code)]
+//undocumented
+struct Coupon {
+    amount: usize,
+    code: String,
+    first_year_only: Option<String>,
+    max_per_user: Option<usize>,
+    r#type: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct Pricing {
     registration: String,
     renewal: String,
     transfer: String,
+    //undocumented field, helps filter out stupid handshake responses
+    pub special_type: Option<SpecialType>,
 }
 
 #[derive(Deserialize, Debug)]
