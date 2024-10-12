@@ -115,7 +115,8 @@ pub enum SpecialType {
 struct Coupon {
     amount: usize,
     code: String,
-    first_year_only: Option<String>,
+    #[serde(default, with = "yesno")]
+    first_year_only: bool,
     max_per_user: Option<usize>,
     r#type: Option<String>,
 }
@@ -135,9 +136,117 @@ struct DomainPricingResponse {
     pricing: HashMap<String, Pricing>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct UpdateNameServers {
     ns: Vec<String>,
+}
+
+mod yesno {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match value {
+            true => "yes",
+            // value of not-yes not documented
+            false => "false",
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let yesno = String::deserialize(deserializer)?;
+        if yesno == "yes" {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+mod stringoneintzero {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            true => serializer.serialize_str("1"),
+            false => serializer.serialize_i32(0),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize, Debug)]
+        #[serde(untagged)]
+        enum PossibleValues {
+            Stringy(String),
+            Inty(i64),
+        }
+        let str_or_int = PossibleValues::deserialize(deserializer)?;
+        match &str_or_int {
+            PossibleValues::Stringy(x) if x == "1" => Ok(true),
+            PossibleValues::Inty(0) => Ok(false),
+            x => Err(serde::de::Error::custom(&format!("invalid value {x:?}"))),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DomainListAll {
+    /// An index to start at when retrieving the domains, defaults to 0. To get all domains increment by 1000 until you receive an empty array.
+    start: usize,
+    /// should be "yes"
+    #[serde(default, with = "yesno")]
+    include_labels: bool,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainListAllResponse {
+    domains: Vec<DomainListAllDomain>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainListAllDomain {
+    domain: String,
+    status: String,
+    // 2018-08-20 17:52:51
+    create_date: String,
+    expire_date: String,
+    // docs say these are "1", probably booleans?
+    // "1" on success, 0 on false?
+    #[serde(with = "stringoneintzero")]
+    security_lock: bool,
+    #[serde(with = "stringoneintzero")]
+    whois_privacy: bool,
+    //these are probably bools
+    // docs say this is a bool, is a string
+    #[serde(with = "stringoneintzero")]
+    auto_renew: bool,
+    #[serde(with = "stringoneintzero")]
+    not_local: bool,
+    #[serde(default)]
+    labels: Vec<Label>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Label {
+    //number in the example
+    id: String,
+    title: String,
+    color: String,
 }
 
 #[derive(Serialize)]
@@ -160,6 +269,7 @@ mod uri {
         "https://api-ipv4.porkbun.com/api/json/v3/ping"
     }
 
+    // this can be a get instead of post?
     pub const fn domain_pricing() -> &'static str {
         "https://api.porkbun.com/api/json/v3/pricing/get"
     }
@@ -168,6 +278,16 @@ mod uri {
         hyper::Uri::try_from(&format!(
             "https://api.porkbun.com/api/json/v3/domain/updateNs/{domain}"
         ))
+    }
+
+    pub fn get_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(&format!(
+            "https://api.porkbun.com/api/json/v3/domain/getNs/{domain}"
+        ))
+    }
+
+    pub fn domain_list_all() -> hyper::Uri {
+        hyper::Uri::from_static("https://api.porkbun.com/api/json/v3/domain/listAll")
     }
 
     pub fn create_dns_record(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
@@ -255,19 +375,62 @@ impl Client {
 
     pub async fn update_ns_for_domain(
         &self,
-        domain: String,
+        domain: &str,
         name_servers: Vec<String>,
     ) -> Result<()> {
         let resp = self
             .inner
             .post_with_api_keys(
-                uri::update_name_servers(&domain)?,
+                uri::update_name_servers(domain)?,
                 UpdateNameServers { ns: name_servers },
             )
             .await?;
         let bytes = resp.into_body().collect().await?.to_bytes();
         let resp = Result::<(), ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(resp)
+    }
+    pub async fn get_ns_for_domain(&self, domain: &str) -> Result<Vec<String>> {
+        let resp = self
+            .inner
+            .post_with_api_keys(uri::get_name_servers(domain)?, ())
+            .await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let body = std::str::from_utf8(&bytes)?;
+        println!("{body}");
+        let resp: UpdateNameServers =
+            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(resp.ns)
+    }
+
+    pub async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
+        let resp = self
+            .inner
+            .post_with_api_keys(
+                uri::domain_list_all(),
+                DomainListAll {
+                    start: offset,
+                    include_labels: true,
+                },
+            )
+            .await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let body = std::str::from_utf8(&bytes)?;
+        println!("{body}");
+        let resp: DomainListAllResponse =
+            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
+        Ok(resp.domains)
+    }
+
+    pub async fn list_all_domains(&self) -> Result<Vec<DomainListAllDomain>> {
+        let mut all = self.list_domains(0).await?;
+        let mut last_len = all.len();
+        // if paginated by 1000, we could probably get away with checking if equal to 1000 and skipping the final check
+        while last_len != 0 {
+            let next = self.list_domains(all.len()).await?;
+            last_len = next.len();
+            all.extend(next.into_iter());
+        }
+        Ok(all)
     }
 
     pub async fn make_dns_record(
@@ -333,6 +496,7 @@ impl ClientInner {
         let req = Request::post(uri).body(http_body_util::Full::new(Bytes::from(
             serde_json::to_string(&body).unwrap(),
         )))?;
+        //todo: handle 404/504 etc
         self.hyper
             .request(req)
             .await
