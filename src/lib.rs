@@ -335,13 +335,10 @@ impl Client {
     }
 
     pub async fn ping(&self) -> Result<IpAddr> {
-        let resp = self
+        let ping: PingResponse = self
             .inner
             .post_with_api_keys(hyper::Uri::from_static(uri::ping()), ())
             .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let ping: PingResponse =
-            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(ping.your_ip)
     }
 
@@ -352,25 +349,19 @@ impl Client {
             your_ip: Ipv4Addr,
             //nxForwardedFor is returned here too?
         }
-        let resp = self
+        let ping: PingV4Response = self
             .inner
             .post_with_api_keys(hyper::Uri::from_static(uri::ping_v4()), ())
             .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let ping: PingV4Response =
-            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(ping.your_ip)
     }
 
     //note: does not require authentication
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>> {
-        let resp = self
+        let resp: DomainPricingResponse = self
             .inner
             .post(hyper::Uri::from_static(uri::domain_pricing()), ())
             .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let resp: DomainPricingResponse =
-            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(resp.pricing)
     }
 
@@ -379,32 +370,23 @@ impl Client {
         domain: &str,
         name_servers: Vec<String>,
     ) -> Result<()> {
-        let resp = self
-            .inner
+        self.inner
             .post_with_api_keys(
                 uri::update_name_servers(domain)?,
                 UpdateNameServers { ns: name_servers },
             )
-            .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let resp = Result::<(), ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
-        Ok(resp)
+            .await
     }
     pub async fn get_ns_for_domain(&self, domain: &str) -> Result<Vec<String>> {
-        let resp = self
+        let resp: UpdateNameServers = self
             .inner
             .post_with_api_keys(uri::get_name_servers(domain)?, ())
             .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
-        let resp: UpdateNameServers =
-            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(resp.ns)
     }
 
     pub async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
-        let resp = self
+        let resp: DomainListAllResponse = self
             .inner
             .post_with_api_keys(
                 uri::domain_list_all(),
@@ -414,11 +396,6 @@ impl Client {
                 },
             )
             .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
-        let resp: DomainListAllResponse =
-            Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)?;
         Ok(resp.domains)
     }
 
@@ -439,27 +416,15 @@ impl Client {
         domain: &str,
         cmd: CreateDnsRecord,
     ) -> Result<CreateDnsRecordResponse> {
-        let resp = self
-            .inner
+        self.inner
             .post_with_api_keys(uri::create_dns_record(domain)?, cmd)
-            .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
-        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
-            .map_err(|e| anyhow::anyhow!(e))
+            .await
     }
 
     pub async fn delete_dns_record_by_id(&self, domain: &str, id: u128) -> Result<()> {
-        let resp = self
-            .inner
+        self.inner
             .post_with_api_keys(uri::delete_dns_record_by_id(domain, id)?, ())
-            .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
-        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
-            .map_err(|e| anyhow::anyhow!(e))
+            .await
     }
 
     pub async fn get_dns_record_by_domain_and_id(
@@ -467,15 +432,9 @@ impl Client {
         domain: &str,
         id: Option<u128>,
     ) -> Result<DnsRecordsByDomainOrIDResponse> {
-        let resp = self
-            .inner
+        self.inner
             .post(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
-            .await?;
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
-        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
-            .map_err(|e| anyhow::anyhow!(e))
+            .await
     }
 }
 
@@ -493,22 +452,28 @@ impl ClientInner {
         }
     }
 
-    pub(crate) async fn post<T: Serialize>(&self, uri: Uri, body: T) -> Result<Response<Incoming>> {
+    pub(crate) async fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
+        &self,
+        uri: Uri,
+        body: T,
+    ) -> Result<D> {
         let req = Request::post(uri).body(http_body_util::Full::new(Bytes::from(
             serde_json::to_string(&body).unwrap(),
         )))?;
         //todo: handle 404/504 etc
-        self.hyper
-            .request(req)
-            .await
+        let resp = self.hyper.request(req).await?;
+        let bytes = resp.into_body().collect().await?.to_bytes();
+        let body = std::str::from_utf8(&bytes)?;
+        println!("{body}");
+        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
             .map_err(|e| anyhow::anyhow!(e))
     }
 
-    pub(crate) async fn post_with_api_keys<T: Serialize>(
+    pub(crate) async fn post_with_api_keys<T: Serialize, D: for<'a> Deserialize<'a>>(
         &self,
         uri: Uri,
         body: T,
-    ) -> Result<Response<Incoming>> {
+    ) -> Result<D> {
         let with_api_keys = WithApiKeys {
             api_keys: &self.api_keys,
             inner: body,
