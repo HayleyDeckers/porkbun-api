@@ -221,6 +221,7 @@ pub struct DomainListAllResponse {
 pub struct DomainListAllDomain {
     domain: String,
     status: String,
+    tld: String,
     // 2018-08-20 17:52:51
     create_date: String,
     expire_date: String,
