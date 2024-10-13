@@ -64,19 +64,56 @@ pub enum DnsRecordType {
     SRV,
     TLSA,
     CAA,
+    HTTPS,
+    SVCB,
 }
 
+impl Display for DnsRecordType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::A => "A",
+            Self::MX => "MX",
+            Self::CNAME => "CNAME",
+            Self::ALIAS => "ALIAS",
+            Self::TXT => "TXT",
+            Self::NS => "NS",
+            Self::AAAA => "AAAA",
+            Self::SRV => "SRV",
+            Self::TLSA => "TLSA",
+            Self::CAA => "CAA",
+            Self::HTTPS => "HTTPS",
+            Self::SVCB => "SVCB",
+        })
+    }
+}
+
+//create, or edit with a domain/id pair
 #[derive(Serialize)]
-pub struct CreateDnsRecord {
+pub struct CreateOrEditDnsRecord {
+    /// The subdomain for the record being created, not including the domain itself. Leave blank to create a record on the root domain. Use * to create a wildcard record.
     #[serde(rename = "name")]
     pub subdomain: Option<String>,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
     pub content: String,
+    /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
+    pub ttl: Option<u32>,
+    pub prio: Option<u32>,
+}
+
+//create, or edit with a domain/subdomain/type in the url.
+// maybe we want to merge this with the CreateOrEditDnsRecord into a single struct with an enum for giving identifier as either
+// a domain/id pair or domain/subdomain/type and picking the appropriate url/body in the client
+#[derive(Serialize)]
+pub struct EditDnsRecordByDomainTypeSubdomain {
+    pub content: String,
+    /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
+    pub ttl: Option<u32>,
+    pub prio: Option<u32>,
 }
 
 #[derive(Deserialize, Debug)]
-pub struct CreateDnsRecordResponse {
+struct CreateDnsRecordResponse {
     // this id is a string in the example docs, but the api returns an integer
     pub id: Option<u128>,
 }
@@ -256,14 +293,14 @@ struct Label {
 #[serde(rename_all = "camelCase")]
 pub struct DomainAddForwardUrl {
     #[serde(skip_serializing_if = "Option::is_none")]
-    subdomain: Option<String>,
-    location: String,
+    pub subdomain: Option<String>,
+    pub location: String,
     #[serde(rename = "type")]
-    forward_type: ForwardType,
+    pub forward_type: ForwardType,
     #[serde(with = "yesno")]
-    include_path: bool,
+    pub include_path: bool,
     #[serde(with = "yesno")]
-    wildcard: bool,
+    pub wildcard: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -296,6 +333,8 @@ struct WithApiKeys<'a, T: Serialize> {
 }
 
 mod uri {
+    use crate::DnsRecordType;
+
     pub const fn ping() -> &'static str {
         "https://api.porkbun.com/api/json/v3/ping"
     }
@@ -353,6 +392,29 @@ mod uri {
         hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/create/{domain}"
         ))
+    }
+
+    pub fn edit_dns_record(
+        domain: &str,
+        id: &str,
+    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(format!(
+            "https://api.porkbun.com/api/json/v3/dns/edit/{domain}/{id}"
+        ))
+    }
+
+    pub fn edit_dns_record_for(
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(if let Some(subdomain) = subdomain {
+            format!(
+            "https://api.porkbun.com/api/json/v3/dns/editByNameType/{domain}/{record_type}/{subdomain}"
+        )
+        } else {
+            format!("https://api.porkbun.com/api/json/v3/dns/editByNameType/{domain}/{record_type}")
+        })
     }
 
     pub fn delete_dns_record_by_id(
@@ -493,10 +555,37 @@ impl Client {
     pub async fn make_dns_record(
         &self,
         domain: &str,
-        cmd: CreateDnsRecord,
-    ) -> Result<CreateDnsRecordResponse> {
-        self.inner
+        cmd: CreateOrEditDnsRecord,
+    ) -> Result<Option<u128>> {
+        let resp: CreateDnsRecordResponse = self
+            .inner
             .post_with_api_keys(uri::create_dns_record(domain)?, cmd)
+            .await?;
+        Ok(resp.id)
+    }
+
+    pub async fn edit_dns_record(
+        &self,
+        domain: &str,
+        id: &str,
+        cmd: CreateOrEditDnsRecord,
+    ) -> Result<()> {
+        self.inner
+            .post_with_api_keys(uri::edit_dns_record(domain, id)?, cmd)
+            .await
+    }
+    pub async fn edit_dns_record_for(
+        &self,
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+        cmd: EditDnsRecordByDomainTypeSubdomain,
+    ) -> Result<()> {
+        self.inner
+            .post_with_api_keys(
+                uri::edit_dns_record_for(domain, record_type, subdomain)?,
+                cmd,
+            )
             .await
     }
 
