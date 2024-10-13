@@ -252,7 +252,7 @@ struct Label {
     color: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainAddForwardUrl {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,11 +266,25 @@ pub struct DomainAddForwardUrl {
     wildcard: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum ForwardType {
     Temporary,
     Permanent,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct GetUrlForwardingResponse {
+    forwards: Vec<Forward>,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    id: String,
+    #[serde(flatten)]
+    forward: DomainAddForwardUrl,
 }
 
 #[derive(Serialize)]
@@ -323,6 +337,15 @@ mod uri {
     pub fn get_url_forward(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
         hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
+        ))
+    }
+
+    pub fn delete_url_forward(
+        domain: &str,
+        record_id: &str,
+    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(format!(
+            "https://api.porkbun.com/api/json/v3/domain/deleteUrlForward/{domain}/{record_id}"
         ))
     }
 
@@ -449,6 +472,21 @@ impl Client {
     pub async fn add_url_forward(&self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
         self.inner
             .post_with_api_keys(uri::add_url_forward(domain)?, cmd)
+            .await
+    }
+
+    pub async fn get_url_forward(&self, domain: &str) -> Result<Vec<Forward>> {
+        let resp: GetUrlForwardingResponse = self
+            .inner
+            .post_with_api_keys(uri::get_url_forward(domain)?, ())
+            .await?;
+        Ok(resp.forwards)
+    }
+
+    // should we type this?
+    pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<()> {
+        self.inner
+            .post_with_api_keys(uri::delete_url_forward(domain, id)?, ())
             .await
     }
 
