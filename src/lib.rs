@@ -220,9 +220,11 @@ pub struct DomainListAllResponse {
 #[serde(rename_all = "camelCase")]
 pub struct DomainListAllDomain {
     domain: String,
+    // usually ACTIVE or..
     status: String,
     tld: String,
     // 2018-08-20 17:52:51
+    // todo: use a dateformat here
     create_date: String,
     expire_date: String,
     // docs say these are "1", probably booleans?
@@ -251,6 +253,27 @@ struct Label {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainAddForwardUrl {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subdomain: Option<String>,
+    location: String,
+    #[serde(rename = "type")]
+    forward_type: ForwardType,
+    #[serde(with = "yesno")]
+    include_path: bool,
+    #[serde(with = "yesno")]
+    wildcard: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardType {
+    Temporary,
+    Permanent,
+}
+
+#[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
     #[serde(flatten)]
     api_keys: &'a ApiKey,
@@ -276,13 +299,13 @@ mod uri {
     }
 
     pub fn update_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(&format!(
+        hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/updateNs/{domain}"
         ))
     }
 
     pub fn get_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(&format!(
+        hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/getNs/{domain}"
         ))
     }
@@ -291,8 +314,20 @@ mod uri {
         hyper::Uri::from_static("https://api.porkbun.com/api/json/v3/domain/listAll")
     }
 
+    pub fn add_url_forward(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(format!(
+            "https://api.porkbun.com/api/json/v3/domain/addUrlForward/{domain}"
+        ))
+    }
+
+    pub fn get_url_forward(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+        hyper::Uri::try_from(format!(
+            "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
+        ))
+    }
+
     pub fn create_dns_record(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(&format!(
+        hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/create/{domain}"
         ))
     }
@@ -301,7 +336,7 @@ mod uri {
         domain: &str,
         id: u128,
     ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(&format!(
+        hyper::Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/delete/{domain}/{id}"
         ))
     }
@@ -311,11 +346,11 @@ mod uri {
         id: Option<u128>,
     ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
         if let Some(id) = id {
-            hyper::Uri::try_from(&format!(
+            hyper::Uri::try_from(format!(
                 "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}/{id}"
             ))
         } else {
-            hyper::Uri::try_from(&format!(
+            hyper::Uri::try_from(format!(
                 "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}"
             ))
         }
@@ -409,6 +444,12 @@ impl Client {
             all.extend(next.into_iter());
         }
         Ok(all)
+    }
+
+    pub async fn add_url_forward(&self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
+        self.inner
+            .post_with_api_keys(uri::add_url_forward(domain)?, cmd)
+            .await
     }
 
     pub async fn make_dns_record(
