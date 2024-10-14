@@ -334,31 +334,32 @@ struct WithApiKeys<'a, T: Serialize> {
 
 mod uri {
     use crate::DnsRecordType;
-
-    pub const fn ping() -> &'static str {
-        "https://api.porkbun.com/api/json/v3/ping"
+    //todo: re-export and use http crate
+    use hyper::{http::uri::InvalidUri, Uri};
+    pub fn ping() -> Uri {
+        Uri::from_static("https://api.porkbun.com/api/json/v3/ping")
     }
 
     // note: the docs say
     // > The dedicated IPv4 hostname is api-ipv4.porkbun.com, use this instead of porkbun.com.
     // which would yield api.api-ipv4.porkbun.com but that's obviously wrong so we don't do that
-    pub const fn ping_v4() -> &'static str {
-        "https://api-ipv4.porkbun.com/api/json/v3/ping"
+    pub fn ping_v4() -> Uri {
+        Uri::from_static("https://api-ipv4.porkbun.com/api/json/v3/ping")
     }
 
     // this can be a get instead of post?
-    pub const fn domain_pricing() -> &'static str {
-        "https://api.porkbun.com/api/json/v3/pricing/get"
+    pub fn domain_pricing() -> Uri {
+        Uri::from_static("https://api.porkbun.com/api/json/v3/pricing/get")
     }
 
-    pub fn update_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn update_name_servers(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/updateNs/{domain}"
         ))
     }
 
-    pub fn get_name_servers(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn get_name_servers(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/getNs/{domain}"
         ))
     }
@@ -367,38 +368,32 @@ mod uri {
         hyper::Uri::from_static("https://api.porkbun.com/api/json/v3/domain/listAll")
     }
 
-    pub fn add_url_forward(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn add_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/addUrlForward/{domain}"
         ))
     }
 
-    pub fn get_url_forward(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn get_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
         ))
     }
 
-    pub fn delete_url_forward(
-        domain: &str,
-        record_id: &str,
-    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn delete_url_forward(domain: &str, record_id: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/domain/deleteUrlForward/{domain}/{record_id}"
         ))
     }
 
-    pub fn create_dns_record(domain: &str) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn create_dns_record(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/create/{domain}"
         ))
     }
 
-    pub fn edit_dns_record(
-        domain: &str,
-        id: &str,
-    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn edit_dns_record(domain: &str, id: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/edit/{domain}/{id}"
         ))
     }
@@ -407,8 +402,8 @@ mod uri {
         domain: &str,
         record_type: DnsRecordType,
         subdomain: Option<&str>,
-    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(if let Some(subdomain) = subdomain {
+    ) -> Result<Uri, InvalidUri> {
+        Uri::try_from(if let Some(subdomain) = subdomain {
             format!(
             "https://api.porkbun.com/api/json/v3/dns/editByNameType/{domain}/{record_type}/{subdomain}"
         )
@@ -417,25 +412,38 @@ mod uri {
         })
     }
 
-    pub fn delete_dns_record_by_id(
-        domain: &str,
-        id: u128,
-    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
-        hyper::Uri::try_from(format!(
+    pub fn delete_dns_record_by_id(domain: &str, id: u128) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/delete/{domain}/{id}"
         ))
+    }
+
+    pub fn delete_dns_record_for(
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+    ) -> Result<Uri, InvalidUri> {
+        Uri::try_from(if let Some(subdomain) = subdomain {
+            format!(
+            "https://api.porkbun.com/api/json/v3/dns/deleteByNameType/{domain}/{record_type}/{subdomain}"
+        )
+        } else {
+            format!(
+                "https://api.porkbun.com/api/json/v3/dns/deleteByNameType/{domain}/{record_type}"
+            )
+        })
     }
 
     pub fn get_dns_record_by_domain_and_id(
         domain: &str,
         id: Option<u128>,
-    ) -> Result<hyper::Uri, hyper::http::uri::InvalidUri> {
+    ) -> Result<Uri, InvalidUri> {
         if let Some(id) = id {
-            hyper::Uri::try_from(format!(
+            Uri::try_from(format!(
                 "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}/{id}"
             ))
         } else {
-            hyper::Uri::try_from(format!(
+            Uri::try_from(format!(
                 "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}"
             ))
         }
@@ -455,10 +463,7 @@ impl Client {
     }
 
     pub async fn ping(&self) -> Result<IpAddr> {
-        let ping: PingResponse = self
-            .inner
-            .post_with_api_keys(hyper::Uri::from_static(uri::ping()), ())
-            .await?;
+        let ping: PingResponse = self.inner.post_with_api_keys(uri::ping(), ()).await?;
         Ok(ping.your_ip)
     }
 
@@ -469,19 +474,13 @@ impl Client {
             your_ip: Ipv4Addr,
             //nxForwardedFor is returned here too?
         }
-        let ping: PingV4Response = self
-            .inner
-            .post_with_api_keys(hyper::Uri::from_static(uri::ping_v4()), ())
-            .await?;
+        let ping: PingV4Response = self.inner.post_with_api_keys(uri::ping_v4(), ()).await?;
         Ok(ping.your_ip)
     }
 
     //note: does not require authentication
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>> {
-        let resp: DomainPricingResponse = self
-            .inner
-            .post(hyper::Uri::from_static(uri::domain_pricing()), ())
-            .await?;
+        let resp: DomainPricingResponse = self.inner.post(uri::domain_pricing(), ()).await?;
         Ok(resp.pricing)
     }
 
@@ -585,6 +584,20 @@ impl Client {
             .post_with_api_keys(
                 uri::edit_dns_record_for(domain, record_type, subdomain)?,
                 cmd,
+            )
+            .await
+    }
+
+    pub async fn delete_dns_record_for(
+        &self,
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+    ) -> Result<()> {
+        self.inner
+            .post_with_api_keys(
+                uri::delete_dns_record_for(domain, record_type, subdomain)?,
+                (),
             )
             .await
     }
