@@ -121,11 +121,15 @@ struct CreateDnsRecordResponse {
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
     id: String,
-    #[serde(rename = "name")]
-    pub subdomain: Option<String>,
+    pub name: String,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
     pub content: String,
+    //string in docs
+    pub ttl: u32,
+    //string in docs
+    pub prio: u32,
+    pub notes: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -324,6 +328,14 @@ pub struct Forward {
     forward: DomainAddForwardUrl,
 }
 
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub struct SslBundle {
+    certificate_chain: String,
+    private_key: String,
+    public_key: String,
+}
+
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
     #[serde(flatten)]
@@ -447,6 +459,28 @@ mod uri {
                 "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}"
             ))
         }
+    }
+
+    pub fn get_dns_record_for(
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+    ) -> Result<Uri, InvalidUri> {
+        Uri::try_from(if let Some(subdomain) = subdomain {
+            format!(
+            "https://api.porkbun.com/api/json/v3/dns/retrieveByNameType/{domain}/{record_type}/{subdomain}"
+        )
+        } else {
+            format!(
+                "https://api.porkbun.com/api/json/v3/dns/retrieveByNameType/{domain}/{record_type}"
+            )
+        })
+    }
+
+    pub fn get_ssl_bundle(domain: &str) -> Result<Uri, InvalidUri> {
+        Uri::try_from(format!(
+            "https://api.porkbun.com/api/json/v3/ssl/retrieve/{domain}"
+        ))
     }
 }
 
@@ -612,9 +646,29 @@ impl Client {
         &self,
         domain: &str,
         id: Option<u128>,
-    ) -> Result<DnsRecordsByDomainOrIDResponse> {
-        self.inner
+    ) -> Result<Vec<DnsEntry>> {
+        let rsp: DnsRecordsByDomainOrIDResponse = self
+            .inner
             .post(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
+            .await?;
+        Ok(rsp.records)
+    }
+    pub async fn get_dns_record_for(
+        &self,
+        domain: &str,
+        record_type: DnsRecordType,
+        subdomain: Option<&str>,
+    ) -> Result<Vec<DnsEntry>> {
+        let rsp: DnsRecordsByDomainOrIDResponse = self
+            .inner
+            .post_with_api_keys(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
+            .await?;
+        Ok(rsp.records)
+    }
+
+    pub async fn get_ssl_bundle(&self, domain: &str) -> Result<SslBundle> {
+        self.inner
+            .post_with_api_keys(uri::get_ssl_bundle(domain)?, ())
             .await
     }
 }
