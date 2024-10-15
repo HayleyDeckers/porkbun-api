@@ -2,7 +2,8 @@ use anyhow::Result;
 use http_body_util::BodyExt;
 use hyper::{
     body::{Bytes, Incoming},
-    Request, Response, Uri,
+    header::HeaderValue,
+    Request, Response, StatusCode, Uri,
 };
 use hyper_tls::HttpsConnector;
 use hyper_util::{
@@ -11,6 +12,7 @@ use hyper_util::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    cell::OnceCell,
     collections::HashMap,
     fmt::Display,
     net::{IpAddr, Ipv4Addr},
@@ -52,7 +54,7 @@ impl<T> From<ApiResponse<T>> for Result<T, ApiError> {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum DnsRecordType {
     A,
     MX,
@@ -98,7 +100,9 @@ pub struct CreateOrEditDnsRecord {
     pub content: String,
     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
     pub ttl: Option<u32>,
+    //these get returned as strings, might be we can set these to non-standard values?
     pub prio: Option<u32>,
+    //comment?
 }
 
 //create, or edit with a domain/subdomain/type in the url.
@@ -112,23 +116,47 @@ pub struct EditDnsRecordByDomainTypeSubdomain {
     pub prio: Option<u32>,
 }
 
-#[derive(Deserialize, Debug)]
-struct CreateDnsRecordResponse {
-    // this id is a string in the example docs, but the api returns an integer
-    pub id: Option<u128>,
+//might be an integer actually but sometimes sends a string
+// so we opt to store it as a string just in case it can start with
+// a '0'
+#[derive(Serialize, Deserialize, Debug)]
+pub struct EntryId {
+    #[serde(deserialize_with = "string_or_int::deserialize")]
+    id: String,
+}
+
+mod string_or_int {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrInt {
+            Int(u64),
+            String(String),
+        }
+        let string_or_int = StringOrInt::deserialize(deserializer)?;
+        match string_or_int {
+            StringOrInt::Int(x) => Ok(x.to_string()),
+            StringOrInt::String(s) => Ok(s),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
+    #[serde(deserialize_with = "string_or_int::deserialize")]
     id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
     pub content: String,
     //string in docs
-    pub ttl: u32,
+    pub ttl: Option<String>,
     //string in docs
-    pub prio: u32,
+    pub prio: Option<String>,
     pub notes: Option<String>,
 }
 
@@ -260,34 +288,35 @@ pub struct DomainListAllResponse {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainListAllDomain {
-    domain: String,
+    pub domain: String,
     // usually ACTIVE or..
-    status: String,
-    tld: String,
+    pub status: String,
+    pub tld: String,
     // 2018-08-20 17:52:51
     // todo: use a dateformat here
-    create_date: String,
-    expire_date: String,
+    pub create_date: String,
+    pub expire_date: String,
     // docs say these are "1", probably booleans?
     // "1" on success, 0 on false?
     #[serde(with = "stringoneintzero")]
-    security_lock: bool,
+    pub security_lock: bool,
     #[serde(with = "stringoneintzero")]
-    whois_privacy: bool,
+    pub whois_privacy: bool,
     //these are probably bools
     // docs say this is a bool, is a string
     #[serde(with = "stringoneintzero")]
-    auto_renew: bool,
+    pub auto_renew: bool,
     #[serde(with = "stringoneintzero")]
-    not_local: bool,
+    pub not_local: bool,
     #[serde(default)]
-    labels: Vec<Label>,
+    pub labels: Vec<Label>,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct Label {
+pub struct Label {
     //number in the example
+    #[serde(deserialize_with = "string_or_int::deserialize")]
     id: String,
     title: String,
     color: String,
@@ -323,6 +352,7 @@ struct GetUrlForwardingResponse {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Forward {
+    #[serde(deserialize_with = "string_or_int::deserialize")]
     id: String,
     #[serde(flatten)]
     forward: DomainAddForwardUrl,
@@ -424,7 +454,7 @@ mod uri {
         })
     }
 
-    pub fn delete_dns_record_by_id(domain: &str, id: u128) -> Result<Uri, InvalidUri> {
+    pub fn delete_dns_record_by_id(domain: &str, id: &str) -> Result<Uri, InvalidUri> {
         Uri::try_from(format!(
             "https://api.porkbun.com/api/json/v3/dns/delete/{domain}/{id}"
         ))
@@ -448,7 +478,7 @@ mod uri {
 
     pub fn get_dns_record_by_domain_and_id(
         domain: &str,
-        id: Option<u128>,
+        id: Option<&str>,
     ) -> Result<Uri, InvalidUri> {
         if let Some(id) = id {
             Uri::try_from(format!(
@@ -589,8 +619,8 @@ impl Client {
         &self,
         domain: &str,
         cmd: CreateOrEditDnsRecord,
-    ) -> Result<Option<u128>> {
-        let resp: CreateDnsRecordResponse = self
+    ) -> Result<String> {
+        let resp: EntryId = self
             .inner
             .post_with_api_keys(uri::create_dns_record(domain)?, cmd)
             .await?;
@@ -636,7 +666,7 @@ impl Client {
             .await
     }
 
-    pub async fn delete_dns_record_by_id(&self, domain: &str, id: u128) -> Result<()> {
+    pub async fn delete_dns_record_by_id(&self, domain: &str, id: &str) -> Result<()> {
         self.inner
             .post_with_api_keys(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
@@ -645,11 +675,11 @@ impl Client {
     pub async fn get_dns_record_by_domain_and_id(
         &self,
         domain: &str,
-        id: Option<u128>,
+        id: Option<&str>,
     ) -> Result<Vec<DnsEntry>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
             .inner
-            .post(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
+            .post_with_api_keys(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
             .await?;
         Ok(rsp.records)
     }
@@ -677,6 +707,7 @@ impl Client {
 struct ClientInner {
     api_keys: Arc<ApiKey>,
     hyper: HyperClient<hyper_tls::HttpsConnector<HttpConnector>, http_body_util::Full<Bytes>>,
+    session: OnceCell<HeaderValue>,
 }
 
 impl ClientInner {
@@ -684,6 +715,7 @@ impl ClientInner {
         Self {
             api_keys,
             hyper: HyperClient::builder(TokioExecutor::new()).build(HttpsConnector::new()),
+            session: OnceCell::new(),
         }
     }
 
@@ -692,14 +724,41 @@ impl ClientInner {
         uri: Uri,
         body: T,
     ) -> Result<D> {
-        let req = Request::post(uri).body(http_body_util::Full::new(Bytes::from(
-            serde_json::to_string(&body).unwrap(),
-        )))?;
+        let json = serde_json::to_string(&body)?;
+        // println!("posting to {uri} with {json}");
+        let body_bytes = http_body_util::Full::new(Bytes::from(json));
+
+        let req = if let Some(cookie) = self.session.get() {
+            // println!("adding cookie {cookie:?}");
+            Request::post(uri.clone()).header(hyper::header::COOKIE, cookie)
+        } else {
+            Request::post(uri.clone())
+        }
+        .body(body_bytes)?;
         //todo: handle 404/504 etc
-        let resp = self.hyper.request(req).await?;
+        let resp = loop {
+            let resp = self.hyper.request(req.clone()).await?;
+            if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
+                break resp;
+            } else {
+                println!("received 502, trying again...");
+            }
+        };
+        if self.session.get().is_none() {
+            if let Some(Ok(cookie)) = resp
+                .headers()
+                .get(hyper::header::SET_COOKIE)
+                .map(HeaderValue::to_str)
+            {
+                let value = cookie.split_once(';').unwrap().0;
+                self.session
+                    .set(HeaderValue::from_str(value).unwrap())
+                    .unwrap()
+            }
+        }
         let bytes = resp.into_body().collect().await?.to_bytes();
-        let body = std::str::from_utf8(&bytes)?;
-        println!("{body}");
+        let rsp_body = std::str::from_utf8(&bytes)?;
+        println!("{rsp_body}");
         Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
             .map_err(|e| anyhow::anyhow!(e))
     }
@@ -709,8 +768,9 @@ impl ClientInner {
         uri: Uri,
         body: T,
     ) -> Result<D> {
+        let cloned_api_keys = self.api_keys.clone();
         let with_api_keys = WithApiKeys {
-            api_keys: &self.api_keys,
+            api_keys: &cloned_api_keys,
             inner: body,
         };
         self.post(uri, with_api_keys).await
