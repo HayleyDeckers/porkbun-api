@@ -1,10 +1,6 @@
 use anyhow::Result;
 use http_body_util::BodyExt;
-use hyper::{
-    body::{Bytes, Incoming},
-    header::HeaderValue,
-    Request, Response, StatusCode, Uri,
-};
+use hyper::{body::Bytes, header::HeaderValue, Request, StatusCode, Uri};
 use hyper_tls::HttpsConnector;
 use hyper_util::{
     client::legacy::{connect::HttpConnector, Client as HyperClient},
@@ -126,7 +122,7 @@ pub struct EntryId {
 }
 
 mod string_or_int {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer};
     pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
     where
         D: Deserializer<'de>,
@@ -148,7 +144,7 @@ mod string_or_int {
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
     #[serde(deserialize_with = "string_or_int::deserialize")]
-    id: String,
+    pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
@@ -161,8 +157,8 @@ pub struct DnsEntry {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct DnsRecordsByDomainOrIDResponse {
-    pub records: Vec<DnsEntry>,
+struct DnsRecordsByDomainOrIDResponse {
+    records: Vec<DnsEntry>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -177,27 +173,28 @@ pub enum SpecialType {
     Other(String),
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(deny_unknown_fields)]
-#[allow(dead_code)]
-//undocumented
-struct Coupon {
-    amount: usize,
-    code: String,
-    #[serde(default, with = "yesno")]
-    first_year_only: bool,
-    max_per_user: Option<usize>,
-    r#type: Option<String>,
-}
+// #[derive(Deserialize, Debug)]
+// #[serde(deny_unknown_fields)]
+// //undocumented
+// pub struct Coupon {
+//     pub amount: usize,
+//     pub code: String,
+//     #[serde(default, with = "yesno")]
+//     pub first_year_only: bool,
+//     pub max_per_user: Option<usize>,
+//     pub r#type: Option<String>,
+// }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Pricing {
-    registration: String,
-    renewal: String,
-    transfer: String,
-    //undocumented field, helps filter out stupid handshake responses
+    pub registration: String,
+    pub renewal: String,
+    pub transfer: String,
+    //undocumented field, helps filter out stupid handshake domains
     pub special_type: Option<SpecialType>,
+    // undocumented
+    // pub coupons: Vec<Coupon>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -211,7 +208,7 @@ struct UpdateNameServers {
 }
 
 mod yesno {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
 
     pub fn serialize<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -238,18 +235,7 @@ mod yesno {
 }
 
 mod stringoneintzero {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub fn serialize<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match value {
-            true => serializer.serialize_str("1"),
-            false => serializer.serialize_i32(0),
-        }
-    }
-
+    use serde::{Deserialize, Deserializer};
     pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
     where
         D: Deserializer<'de>,
@@ -317,9 +303,9 @@ pub struct DomainListAllDomain {
 pub struct Label {
     //number in the example
     #[serde(deserialize_with = "string_or_int::deserialize")]
-    id: String,
-    title: String,
-    color: String,
+    pub id: String,
+    pub title: String,
+    pub color: String,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -353,17 +339,17 @@ struct GetUrlForwardingResponse {
 #[serde(rename_all = "camelCase")]
 pub struct Forward {
     #[serde(deserialize_with = "string_or_int::deserialize")]
-    id: String,
+    pub id: String,
     #[serde(flatten)]
-    forward: DomainAddForwardUrl,
+    pub forward: DomainAddForwardUrl,
 }
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "lowercase")]
 pub struct SslBundle {
-    certificate_chain: String,
-    private_key: String,
-    public_key: String,
+    pub certificate_chain: String,
+    pub private_key: String,
+    pub public_key: String,
 }
 
 #[derive(Serialize)]
@@ -741,7 +727,7 @@ impl ClientInner {
             if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
                 break resp;
             } else {
-                println!("received 502, trying again...");
+                // println!("received 502, trying again...");
             }
         };
         if self.session.get().is_none() {
@@ -757,8 +743,8 @@ impl ClientInner {
             }
         }
         let bytes = resp.into_body().collect().await?.to_bytes();
-        let rsp_body = std::str::from_utf8(&bytes)?;
-        println!("{rsp_body}");
+        // let rsp_body = std::str::from_utf8(&bytes)?;
+        // println!("{rsp_body}");
         Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
             .map_err(|e| anyhow::anyhow!(e))
     }
