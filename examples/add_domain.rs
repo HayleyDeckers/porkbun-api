@@ -12,9 +12,9 @@ async fn main() -> anyhow::Result<()> {
         .make_dns_record(
             domain,
             CreateOrEditDnsRecord {
-                subdomain: Some("porkbun-api".to_owned()),
+                subdomain: Some("porkbun-api"),
                 record_type: DnsRecordType::TXT,
-                content: "🦆".to_owned(),
+                content: "🦆",
                 ttl: None,
                 prio: None,
             },

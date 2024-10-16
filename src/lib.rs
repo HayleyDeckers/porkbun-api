@@ -90,13 +90,13 @@ impl Display for DnsRecordType {
 
 //create, or edit with a domain/id pair
 #[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct CreateOrEditDnsRecord {
+pub struct CreateOrEditDnsRecord<'a> {
     /// The subdomain for the record being created, not including the domain itself. Leave blank to create a record on the root domain. Use * to create a wildcard record.
     #[serde(rename = "name")]
-    pub subdomain: Option<String>,
+    pub subdomain: Option<&'a str>,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
-    pub content: String,
+    pub content: &'a str,
     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
     pub ttl: Option<u32>,
     //these get returned as strings, might be we can set these to non-standard values?
@@ -110,8 +110,8 @@ pub struct CreateOrEditDnsRecord {
 // maybe we want to merge this with the CreateOrEditDnsRecord into a single struct with an enum for giving identifier as either
 // a domain/id pair or domain/subdomain/type and picking the appropriate url/body in the client
 #[derive(Serialize)]
-pub struct EditDnsRecordByDomainTypeSubdomain {
-    pub content: String,
+pub struct EditDnsRecordByDomainTypeSubdomain<'a> {
+    pub content: &'a str,
     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
     pub ttl: Option<u32>,
     pub prio: Option<u32>,
@@ -416,7 +416,7 @@ impl<P: Post> Client<P> {
     pub async fn make_dns_record(
         &self,
         domain: &str,
-        cmd: CreateOrEditDnsRecord,
+        cmd: CreateOrEditDnsRecord<'_>,
     ) -> Result<String> {
         let resp: EntryId = self
             .post_with_api_key(uri::create_dns_record(domain)?, cmd)
@@ -428,7 +428,7 @@ impl<P: Post> Client<P> {
         &self,
         domain: &str,
         id: &str,
-        cmd: CreateOrEditDnsRecord,
+        cmd: CreateOrEditDnsRecord<'_>,
     ) -> Result<()> {
         self.post_with_api_key(uri::edit_dns_record(domain, id)?, cmd)
             .await
@@ -438,7 +438,7 @@ impl<P: Post> Client<P> {
         domain: &str,
         record_type: DnsRecordType,
         subdomain: Option<&str>,
-        cmd: EditDnsRecordByDomainTypeSubdomain,
+        cmd: EditDnsRecordByDomainTypeSubdomain<'_>,
     ) -> Result<()> {
         self.post_with_api_key(
             uri::edit_dns_record_for(domain, record_type, subdomain)?,

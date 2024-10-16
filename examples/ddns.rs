@@ -32,9 +32,9 @@ async fn main() -> anyhow::Result<()> {
         DnsRecordType::A
     };
     let new_entry = CreateOrEditDnsRecord {
-        subdomain: subdomain.map(String::from),
+        subdomain,
         record_type,
-        content: my_ip.to_string(),
+        content: &my_ip.to_string(),
         ttl: None,
         prio: None,
     };
@@ -61,9 +61,9 @@ async fn main() -> anyhow::Result<()> {
         let my_ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let record_type = DnsRecordType::A;
         let new_entry = CreateOrEditDnsRecord {
-            subdomain: subdomain.map(String::from),
+            subdomain,
             record_type,
-            content: my_ip.to_string(),
+            content: &my_ip.to_string(),
             ttl: None,
             prio: None,
         };
