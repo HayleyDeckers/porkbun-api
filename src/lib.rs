@@ -11,8 +11,8 @@ use std::{
     cell::OnceCell,
     collections::HashMap,
     fmt::Display,
+    future::Future,
     net::{IpAddr, Ipv4Addr},
-    sync::Arc,
 };
 
 #[derive(Deserialize, Serialize)]
@@ -355,7 +355,7 @@ pub struct SslBundle {
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
     #[serde(flatten)]
-    api_keys: &'a ApiKey,
+    api_key: &'a ApiKey,
     #[serde(flatten)]
     inner: T,
 }
@@ -500,20 +500,40 @@ mod uri {
     }
 }
 
-#[derive(Clone)]
-pub struct Client {
-    inner: ClientInner,
+pub struct Client<P: Post> {
+    inner: P,
+    api_key: ApiKey,
 }
 
-impl Client {
+pub type DefaultClient = Client<DefaultTransport>;
+
+impl DefaultClient {
     pub fn new(api_key: ApiKey) -> Self {
+        Self::new_with_transport(api_key, DefaultTransport::new())
+    }
+}
+
+impl<P: Post> Client<P> {
+    fn new_with_transport(api_key: ApiKey, transport: P) -> Self {
         Self {
-            inner: ClientInner::new(Arc::new(api_key)),
+            inner: transport,
+            api_key,
         }
+    }
+    async fn post_with_api_key<T: Serialize, D: for<'a> Deserialize<'a>>(
+        &self,
+        uri: Uri,
+        body: T,
+    ) -> Result<D> {
+        let with_api_key = WithApiKeys {
+            api_key: &self.api_key,
+            inner: body,
+        };
+        self.inner.post(uri, with_api_key).await
     }
 
     pub async fn ping(&self) -> Result<IpAddr> {
-        let ping: PingResponse = self.inner.post_with_api_keys(uri::ping(), ()).await?;
+        let ping: PingResponse = self.post_with_api_key(uri::ping(), ()).await?;
         Ok(ping.your_ip)
     }
 
@@ -524,7 +544,7 @@ impl Client {
             your_ip: Ipv4Addr,
             //nxForwardedFor is returned here too?
         }
-        let ping: PingV4Response = self.inner.post_with_api_keys(uri::ping_v4(), ()).await?;
+        let ping: PingV4Response = self.post_with_api_key(uri::ping_v4(), ()).await?;
         Ok(ping.your_ip)
     }
 
@@ -539,25 +559,22 @@ impl Client {
         domain: &str,
         name_servers: Vec<String>,
     ) -> Result<()> {
-        self.inner
-            .post_with_api_keys(
-                uri::update_name_servers(domain)?,
-                UpdateNameServers { ns: name_servers },
-            )
-            .await
+        self.post_with_api_key(
+            uri::update_name_servers(domain)?,
+            UpdateNameServers { ns: name_servers },
+        )
+        .await
     }
     pub async fn get_ns_for_domain(&self, domain: &str) -> Result<Vec<String>> {
         let resp: UpdateNameServers = self
-            .inner
-            .post_with_api_keys(uri::get_name_servers(domain)?, ())
+            .post_with_api_key(uri::get_name_servers(domain)?, ())
             .await?;
         Ok(resp.ns)
     }
 
     pub async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
         let resp: DomainListAllResponse = self
-            .inner
-            .post_with_api_keys(
+            .post_with_api_key(
                 uri::domain_list_all(),
                 DomainListAll {
                     start: offset,
@@ -581,23 +598,20 @@ impl Client {
     }
 
     pub async fn add_url_forward(&self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
-        self.inner
-            .post_with_api_keys(uri::add_url_forward(domain)?, cmd)
+        self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
             .await
     }
 
     pub async fn get_url_forward(&self, domain: &str) -> Result<Vec<Forward>> {
         let resp: GetUrlForwardingResponse = self
-            .inner
-            .post_with_api_keys(uri::get_url_forward(domain)?, ())
+            .post_with_api_key(uri::get_url_forward(domain)?, ())
             .await?;
         Ok(resp.forwards)
     }
 
     // should we type this?
     pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<()> {
-        self.inner
-            .post_with_api_keys(uri::delete_url_forward(domain, id)?, ())
+        self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
             .await
     }
 
@@ -607,8 +621,7 @@ impl Client {
         cmd: CreateOrEditDnsRecord,
     ) -> Result<String> {
         let resp: EntryId = self
-            .inner
-            .post_with_api_keys(uri::create_dns_record(domain)?, cmd)
+            .post_with_api_key(uri::create_dns_record(domain)?, cmd)
             .await?;
         Ok(resp.id)
     }
@@ -619,8 +632,7 @@ impl Client {
         id: &str,
         cmd: CreateOrEditDnsRecord,
     ) -> Result<()> {
-        self.inner
-            .post_with_api_keys(uri::edit_dns_record(domain, id)?, cmd)
+        self.post_with_api_key(uri::edit_dns_record(domain, id)?, cmd)
             .await
     }
     pub async fn edit_dns_record_for(
@@ -630,12 +642,11 @@ impl Client {
         subdomain: Option<&str>,
         cmd: EditDnsRecordByDomainTypeSubdomain,
     ) -> Result<()> {
-        self.inner
-            .post_with_api_keys(
-                uri::edit_dns_record_for(domain, record_type, subdomain)?,
-                cmd,
-            )
-            .await
+        self.post_with_api_key(
+            uri::edit_dns_record_for(domain, record_type, subdomain)?,
+            cmd,
+        )
+        .await
     }
 
     pub async fn delete_dns_record_for(
@@ -644,17 +655,15 @@ impl Client {
         record_type: DnsRecordType,
         subdomain: Option<&str>,
     ) -> Result<()> {
-        self.inner
-            .post_with_api_keys(
-                uri::delete_dns_record_for(domain, record_type, subdomain)?,
-                (),
-            )
-            .await
+        self.post_with_api_key(
+            uri::delete_dns_record_for(domain, record_type, subdomain)?,
+            (),
+        )
+        .await
     }
 
     pub async fn delete_dns_record_by_id(&self, domain: &str, id: &str) -> Result<()> {
-        self.inner
-            .post_with_api_keys(uri::delete_dns_record_by_id(domain, id)?, ())
+        self.post_with_api_key(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
     }
 
@@ -664,8 +673,7 @@ impl Client {
         id: Option<&str>,
     ) -> Result<Vec<DnsEntry>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
-            .inner
-            .post_with_api_keys(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
             .await?;
         Ok(rsp.records)
     }
@@ -676,40 +684,42 @@ impl Client {
         subdomain: Option<&str>,
     ) -> Result<Vec<DnsEntry>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
-            .inner
-            .post_with_api_keys(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
+            .post_with_api_key(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
             .await?;
         Ok(rsp.records)
     }
 
     pub async fn get_ssl_bundle(&self, domain: &str) -> Result<SslBundle> {
-        self.inner
-            .post_with_api_keys(uri::get_ssl_bundle(domain)?, ())
+        self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
             .await
     }
 }
 
-#[derive(Clone)]
-struct ClientInner {
-    api_keys: Arc<ApiKey>,
+pub struct DefaultTransport {
     hyper: HyperClient<hyper_tls::HttpsConnector<HttpConnector>, http_body_util::Full<Bytes>>,
     session: OnceCell<HeaderValue>,
 }
 
-impl ClientInner {
-    pub(crate) fn new(api_keys: Arc<ApiKey>) -> Self {
+impl DefaultTransport {
+    pub(crate) fn new() -> Self {
         Self {
-            api_keys,
             hyper: HyperClient::builder(TokioExecutor::new()).build(HttpsConnector::new()),
             session: OnceCell::new(),
         }
     }
+}
 
-    pub(crate) async fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
+/// interface trait for the transport layer
+pub trait Post {
+    fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
         &self,
         uri: Uri,
         body: T,
-    ) -> Result<D> {
+    ) -> impl Future<Output = Result<D>>;
+}
+
+impl Post for DefaultTransport {
+    async fn post<T: Serialize, D: for<'a> Deserialize<'a>>(&self, uri: Uri, body: T) -> Result<D> {
         let json = serde_json::to_string(&body)?;
         // println!("posting to {uri} with {json}");
         let body_bytes = http_body_util::Full::new(Bytes::from(json));
@@ -747,18 +757,5 @@ impl ClientInner {
         // println!("{rsp_body}");
         Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
             .map_err(|e| anyhow::anyhow!(e))
-    }
-
-    pub(crate) async fn post_with_api_keys<T: Serialize, D: for<'a> Deserialize<'a>>(
-        &self,
-        uri: Uri,
-        body: T,
-    ) -> Result<D> {
-        let cloned_api_keys = self.api_keys.clone();
-        let with_api_keys = WithApiKeys {
-            api_keys: &cloned_api_keys,
-            inner: body,
-        };
-        self.post(uri, with_api_keys).await
     }
 }
