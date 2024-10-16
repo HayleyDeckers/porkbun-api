@@ -53,7 +53,7 @@ impl<T> From<ApiResponse<T>> for Result<T, ApiError> {
     }
 }
 
-#[derive(Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum DnsRecordType {
     A,
     MX,
@@ -89,7 +89,7 @@ impl Display for DnsRecordType {
 }
 
 //create, or edit with a domain/id pair
-#[derive(Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct CreateOrEditDnsRecord {
     /// The subdomain for the record being created, not including the domain itself. Leave blank to create a record on the root domain. Use * to create a wildcard record.
     #[serde(rename = "name")]
@@ -101,7 +101,9 @@ pub struct CreateOrEditDnsRecord {
     pub ttl: Option<u32>,
     //these get returned as strings, might be we can set these to non-standard values?
     pub prio: Option<u32>,
-    //comment?
+    // you'd expect a comment field here, but its missing from the api 🥲
+    // doesn't seem to be notes, note, or comments
+    //todo: ask if there is an api? the web interface seems to use a different api. including one with bulk mgmt
 }
 
 //create, or edit with a domain/subdomain/type in the url.
@@ -118,8 +120,9 @@ pub struct EditDnsRecordByDomainTypeSubdomain {
 //might be an integer actually but sometimes sends a string
 // so we opt to store it as a string just in case it can start with
 // a '0'
-#[derive(Serialize, Deserialize, Debug)]
-pub struct EntryId {
+// todo: ask about this
+#[derive(Deserialize, Debug)]
+struct EntryId {
     #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     id: String,
 }
@@ -153,6 +156,7 @@ struct PingResponse {
 #[serde(rename_all = "lowercase")]
 pub enum SpecialType {
     Handshake,
+    //todo: ask about other known values
     Other(String),
 }
 
@@ -174,14 +178,16 @@ pub struct Pricing {
     pub registration: String,
     pub renewal: String,
     pub transfer: String,
+    //todo: ask
     //undocumented field, helps filter out stupid handshake domains
     pub special_type: Option<SpecialType>,
-    // undocumented
+    // undocumented, todo: ask
     // pub coupons: Vec<Coupon>,
 }
 
 #[derive(Deserialize, Debug)]
 struct DomainPricingResponse {
+    //tld-to-pricing
     pricing: HashMap<String, Pricing>,
 }
 
@@ -211,6 +217,7 @@ pub struct DomainListAllResponse {
 pub struct DomainListAllDomain {
     pub domain: String,
     // usually ACTIVE or..
+    //todo: enum?
     pub status: String,
     pub tld: String,
     // 2018-08-20 17:52:51
@@ -218,12 +225,10 @@ pub struct DomainListAllDomain {
     pub create_date: String,
     pub expire_date: String,
     // docs say these are "1", probably booleans?
-    // "1" on success, 0 on false?
     #[serde(with = "serde_util::stringoneintzero")]
     pub security_lock: bool,
     #[serde(with = "serde_util::stringoneintzero")]
     pub whois_privacy: bool,
-    //these are probably bools
     // docs say this is a bool, is a string
     #[serde(with = "serde_util::stringoneintzero")]
     pub auto_renew: bool,
