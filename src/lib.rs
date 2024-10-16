@@ -1,3 +1,6 @@
+mod serde_util;
+mod uri;
+
 use anyhow::Result;
 use http_body_util::BodyExt;
 use hyper::{body::Bytes, header::HeaderValue, Request, StatusCode, Uri};
@@ -117,33 +120,13 @@ pub struct EditDnsRecordByDomainTypeSubdomain {
 // a '0'
 #[derive(Serialize, Deserialize, Debug)]
 pub struct EntryId {
-    #[serde(deserialize_with = "string_or_int::deserialize")]
+    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     id: String,
-}
-
-mod string_or_int {
-    use serde::{Deserialize, Deserializer};
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<String, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum StringOrInt {
-            Int(u64),
-            String(String),
-        }
-        let string_or_int = StringOrInt::deserialize(deserializer)?;
-        match string_or_int {
-            StringOrInt::Int(x) => Ok(x.to_string()),
-            StringOrInt::String(s) => Ok(s),
-        }
-    }
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
-    #[serde(deserialize_with = "string_or_int::deserialize")]
+    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
@@ -207,61 +190,13 @@ struct UpdateNameServers {
     ns: Vec<String>,
 }
 
-mod yesno {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &bool, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(match value {
-            true => "yes",
-            // value of not-yes not documented
-            false => "false",
-        })
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let yesno = String::deserialize(deserializer)?;
-        if yesno == "yes" {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-}
-
-mod stringoneintzero {
-    use serde::{Deserialize, Deserializer};
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize, Debug)]
-        #[serde(untagged)]
-        enum PossibleValues {
-            Stringy(String),
-            Inty(i64),
-        }
-        let str_or_int = PossibleValues::deserialize(deserializer)?;
-        match &str_or_int {
-            PossibleValues::Stringy(x) if x == "1" => Ok(true),
-            PossibleValues::Inty(0) => Ok(false),
-            x => Err(serde::de::Error::custom(&format!("invalid value {x:?}"))),
-        }
-    }
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DomainListAll {
     /// An index to start at when retrieving the domains, defaults to 0. To get all domains increment by 1000 until you receive an empty array.
     start: usize,
     /// should be "yes"
-    #[serde(default, with = "yesno")]
+    #[serde(default, with = "serde_util::yesno")]
     include_labels: bool,
 }
 
@@ -284,15 +219,15 @@ pub struct DomainListAllDomain {
     pub expire_date: String,
     // docs say these are "1", probably booleans?
     // "1" on success, 0 on false?
-    #[serde(with = "stringoneintzero")]
+    #[serde(with = "serde_util::stringoneintzero")]
     pub security_lock: bool,
-    #[serde(with = "stringoneintzero")]
+    #[serde(with = "serde_util::stringoneintzero")]
     pub whois_privacy: bool,
     //these are probably bools
     // docs say this is a bool, is a string
-    #[serde(with = "stringoneintzero")]
+    #[serde(with = "serde_util::stringoneintzero")]
     pub auto_renew: bool,
-    #[serde(with = "stringoneintzero")]
+    #[serde(with = "serde_util::stringoneintzero")]
     pub not_local: bool,
     #[serde(default)]
     pub labels: Vec<Label>,
@@ -302,7 +237,7 @@ pub struct DomainListAllDomain {
 #[serde(rename_all = "camelCase")]
 pub struct Label {
     //number in the example
-    #[serde(deserialize_with = "string_or_int::deserialize")]
+    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     pub id: String,
     pub title: String,
     pub color: String,
@@ -316,9 +251,9 @@ pub struct DomainAddForwardUrl {
     pub location: String,
     #[serde(rename = "type")]
     pub forward_type: ForwardType,
-    #[serde(with = "yesno")]
+    #[serde(with = "serde_util::yesno")]
     pub include_path: bool,
-    #[serde(with = "yesno")]
+    #[serde(with = "serde_util::yesno")]
     pub wildcard: bool,
 }
 
@@ -338,7 +273,7 @@ struct GetUrlForwardingResponse {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Forward {
-    #[serde(deserialize_with = "string_or_int::deserialize")]
+    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     pub id: String,
     #[serde(flatten)]
     pub forward: DomainAddForwardUrl,
@@ -360,154 +295,12 @@ struct WithApiKeys<'a, T: Serialize> {
     inner: T,
 }
 
-mod uri {
-    use crate::DnsRecordType;
-    //todo: re-export and use http crate
-    use hyper::{http::uri::InvalidUri, Uri};
-    pub fn ping() -> Uri {
-        Uri::from_static("https://api.porkbun.com/api/json/v3/ping")
-    }
-
-    // note: the docs say
-    // > The dedicated IPv4 hostname is api-ipv4.porkbun.com, use this instead of porkbun.com.
-    // which would yield api.api-ipv4.porkbun.com but that's obviously wrong so we don't do that
-    pub fn ping_v4() -> Uri {
-        Uri::from_static("https://api-ipv4.porkbun.com/api/json/v3/ping")
-    }
-
-    // this can be a get instead of post?
-    pub fn domain_pricing() -> Uri {
-        Uri::from_static("https://api.porkbun.com/api/json/v3/pricing/get")
-    }
-
-    pub fn update_name_servers(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/domain/updateNs/{domain}"
-        ))
-    }
-
-    pub fn get_name_servers(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/domain/getNs/{domain}"
-        ))
-    }
-
-    pub fn domain_list_all() -> hyper::Uri {
-        hyper::Uri::from_static("https://api.porkbun.com/api/json/v3/domain/listAll")
-    }
-
-    pub fn add_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/domain/addUrlForward/{domain}"
-        ))
-    }
-
-    pub fn get_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
-        ))
-    }
-
-    pub fn delete_url_forward(domain: &str, record_id: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/domain/deleteUrlForward/{domain}/{record_id}"
-        ))
-    }
-
-    pub fn create_dns_record(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/dns/create/{domain}"
-        ))
-    }
-
-    pub fn edit_dns_record(domain: &str, id: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/dns/edit/{domain}/{id}"
-        ))
-    }
-
-    pub fn edit_dns_record_for(
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-    ) -> Result<Uri, InvalidUri> {
-        Uri::try_from(if let Some(subdomain) = subdomain {
-            format!(
-            "https://api.porkbun.com/api/json/v3/dns/editByNameType/{domain}/{record_type}/{subdomain}"
-        )
-        } else {
-            format!("https://api.porkbun.com/api/json/v3/dns/editByNameType/{domain}/{record_type}")
-        })
-    }
-
-    pub fn delete_dns_record_by_id(domain: &str, id: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/dns/delete/{domain}/{id}"
-        ))
-    }
-
-    pub fn delete_dns_record_for(
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-    ) -> Result<Uri, InvalidUri> {
-        Uri::try_from(if let Some(subdomain) = subdomain {
-            format!(
-            "https://api.porkbun.com/api/json/v3/dns/deleteByNameType/{domain}/{record_type}/{subdomain}"
-        )
-        } else {
-            format!(
-                "https://api.porkbun.com/api/json/v3/dns/deleteByNameType/{domain}/{record_type}"
-            )
-        })
-    }
-
-    pub fn get_dns_record_by_domain_and_id(
-        domain: &str,
-        id: Option<&str>,
-    ) -> Result<Uri, InvalidUri> {
-        if let Some(id) = id {
-            Uri::try_from(format!(
-                "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}/{id}"
-            ))
-        } else {
-            Uri::try_from(format!(
-                "https://api.porkbun.com/api/json/v3/dns/retrieve/{domain}"
-            ))
-        }
-    }
-
-    pub fn get_dns_record_for(
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-    ) -> Result<Uri, InvalidUri> {
-        Uri::try_from(if let Some(subdomain) = subdomain {
-            format!(
-            "https://api.porkbun.com/api/json/v3/dns/retrieveByNameType/{domain}/{record_type}/{subdomain}"
-        )
-        } else {
-            format!(
-                "https://api.porkbun.com/api/json/v3/dns/retrieveByNameType/{domain}/{record_type}"
-            )
-        })
-    }
-
-    pub fn get_ssl_bundle(domain: &str) -> Result<Uri, InvalidUri> {
-        Uri::try_from(format!(
-            "https://api.porkbun.com/api/json/v3/ssl/retrieve/{domain}"
-        ))
-    }
-}
-
 pub struct Client<P: Post> {
     inner: P,
     api_key: ApiKey,
 }
 
-pub type DefaultClient = Client<DefaultTransport>;
-
-impl DefaultClient {
+impl Client<DefaultTransport> {
     pub fn new(api_key: ApiKey) -> Self {
         Self::new_with_transport(api_key, DefaultTransport::new())
     }
