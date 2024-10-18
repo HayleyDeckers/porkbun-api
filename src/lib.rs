@@ -2,6 +2,7 @@ mod serde_util;
 mod uri;
 
 use anyhow::Result;
+use chrono::NaiveDateTime;
 use http_body_util::BodyExt;
 use hyper::{body::Bytes, header::HeaderValue, Request, StatusCode, Uri};
 use hyper_tls::HttpsConnector;
@@ -136,9 +137,11 @@ pub struct DnsEntry {
     pub record_type: DnsRecordType,
     pub content: String,
     //string in docs
-    pub ttl: Option<String>,
+    #[serde(deserialize_with = "serde_util::optionintfromstr::deserialize")]
+    pub ttl: Option<u64>,
     //string in docs
-    pub prio: Option<String>,
+    #[serde(deserialize_with = "serde_util::optionintfromstr::deserialize")]
+    pub prio: Option<u64>,
     pub notes: Option<String>,
 }
 
@@ -160,13 +163,12 @@ pub enum SpecialType {
     Other(String),
 }
 
+//undocumented
 // #[derive(Deserialize, Debug)]
-// #[serde(deny_unknown_fields)]
-// //undocumented
 // pub struct Coupon {
 //     pub amount: usize,
 //     pub code: String,
-//     #[serde(default, with = "yesno")]
+//     #[serde(default, with = "serde_util::yesno")]
 //     pub first_year_only: bool,
 //     pub max_per_user: Option<usize>,
 //     pub r#type: Option<String>,
@@ -217,13 +219,13 @@ pub struct DomainListAllResponse {
 pub struct DomainListAllDomain {
     pub domain: String,
     // usually ACTIVE or..
-    //todo: enum?
     pub status: String,
     pub tld: String,
-    // 2018-08-20 17:52:51
-    // todo: use a dateformat here
-    pub create_date: String,
-    pub expire_date: String,
+    // ask: what is the TZ of this?
+    #[serde(with = "serde_util::datetime")]
+    pub create_date: NaiveDateTime,
+    #[serde(with = "serde_util::datetime")]
+    pub expire_date: NaiveDateTime,
     // docs say these are "1", probably booleans?
     #[serde(with = "serde_util::stringoneintzero")]
     pub security_lock: bool,
@@ -241,7 +243,6 @@ pub struct DomainListAllDomain {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Label {
-    //number in the example
     #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     pub id: String,
     pub title: String,
@@ -300,6 +301,15 @@ struct WithApiKeys<'a, T: Serialize> {
     inner: T,
 }
 
+/// interface trait for the transport layer
+pub trait Post {
+    fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
+        &self,
+        uri: Uri,
+        body: T,
+    ) -> impl Future<Output = Result<D>>;
+}
+
 pub struct Client<P: Post> {
     inner: P,
     api_key: ApiKey,
@@ -340,7 +350,7 @@ impl<P: Post> Client<P> {
         #[serde(rename_all = "camelCase")]
         struct PingV4Response {
             your_ip: Ipv4Addr,
-            //nxForwardedFor is returned here too?
+            //xForwardedFor is returned here too?
         }
         let ping: PingV4Response = self.post_with_api_key(uri::ping_v4(), ()).await?;
         Ok(ping.your_ip)
@@ -495,6 +505,7 @@ impl<P: Post> Client<P> {
 
 pub struct DefaultTransport {
     hyper: HyperClient<hyper_tls::HttpsConnector<HttpConnector>, http_body_util::Full<Bytes>>,
+    //stores the first (session) cookie it sees and then adds it to all future requests
     session: OnceCell<HeaderValue>,
 }
 
@@ -507,29 +518,22 @@ impl DefaultTransport {
     }
 }
 
-/// interface trait for the transport layer
-pub trait Post {
-    fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
-        &self,
-        uri: Uri,
-        body: T,
-    ) -> impl Future<Output = Result<D>>;
-}
-
 impl Post for DefaultTransport {
     async fn post<T: Serialize, D: for<'a> Deserialize<'a>>(&self, uri: Uri, body: T) -> Result<D> {
         let json = serde_json::to_string(&body)?;
-        // println!("posting to {uri} with {json}");
         let body_bytes = http_body_util::Full::new(Bytes::from(json));
 
         let req = if let Some(cookie) = self.session.get() {
-            // println!("adding cookie {cookie:?}");
             Request::post(uri.clone()).header(hyper::header::COOKIE, cookie)
         } else {
             Request::post(uri.clone())
         }
         .body(body_bytes)?;
-        //todo: handle 404/504 etc
+        // todo:
+        // docs say that "Any HTTP response code other than 200 is an error", experimentally 502 is used as a rate-limiter
+        // so we retry on 502's. This is not-great from a rate-limiting perspective but we don't want to block the async thread.
+        // sorry porkbun
+        //   we might also want to follow redirects. Docs says their errors, technically, but would future proof against them ever moving the api endpoint
         let resp = loop {
             let resp = self.hyper.request(req.clone()).await?;
             if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
@@ -551,8 +555,6 @@ impl Post for DefaultTransport {
             }
         }
         let bytes = resp.into_body().collect().await?.to_bytes();
-        // let rsp_body = std::str::from_utf8(&bytes)?;
-        // println!("{rsp_body}");
         Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
             .map_err(|e| anyhow::anyhow!(e))
     }

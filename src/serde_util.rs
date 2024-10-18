@@ -65,3 +65,36 @@ pub mod stringoneintzero {
         }
     }
 }
+
+pub mod optionintfromstr {
+    use serde::{de::Error, Deserialize, Deserializer};
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrInt {
+            Int(u64),
+            String(String),
+        }
+        let string_or_int = Option::<StringOrInt>::deserialize(deserializer)?;
+        match string_or_int {
+            Some(StringOrInt::Int(x)) => Ok(Some(x)),
+            Some(StringOrInt::String(s)) => s.parse().map_err(Error::custom).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
+pub mod datetime {
+    use chrono::NaiveDateTime;
+    use serde::{de::Error, Deserialize, Deserializer};
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<NaiveDateTime, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        NaiveDateTime::parse_from_str(&String::deserialize(deserializer)?, "%Y-%m-%d %H:%M:%S")
+            .map_err(|e| Error::custom(&format!("failed to parse datetime: {e}")))
+    }
+}
