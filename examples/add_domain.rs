@@ -1,25 +1,17 @@
-use porkbun_api::{CreateOrEditDnsRecord, DnsRecordType};
-
+use porkbun_api::{Client, CreateOrEditDnsRecord};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let file = std::fs::File::open("secrets/api_key.json")?;
     let api_key = serde_json::from_reader(file)?;
-    let client = porkbun_api::Client::new(api_key);
+    let client = Client::new(api_key);
 
-    let domain = &client.list_domains(0).await?[0].domain;
-
-    let id = client
-        .make_dns_record(
-            domain,
-            CreateOrEditDnsRecord {
-                subdomain: Some("porkbun-api"),
-                record_type: DnsRecordType::TXT,
-                content: "🦆",
-                ttl: None,
-                prio: None,
-            },
-        )
-        .await?;
-    client.delete_dns_record_by_id(domain, &id).await?;
+    let domain = &client.domains().await?[0].domain;
+    let subdomain = Some("my.ip");
+    let my_ip = client.ping().await?;
+    let record = CreateOrEditDnsRecord::A_or_AAAA(subdomain, my_ip);
+    let id = client.create(domain, record).await?;
+    println!("added record {id}");
+    client.delete(domain, &id).await?;
+    println!("removed record {id}");
     Ok(())
 }

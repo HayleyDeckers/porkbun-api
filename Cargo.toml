@@ -3,27 +3,45 @@ name = "porkbun-api"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["default-client"]
+default-client = [
+    "dep:tokio",
+    "dep:hyper-util",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "dep:rustls-platform-verifier",
+    "dep:cookie",
+]
+
 [dependencies]
 serde = { version = "1.0.203", features = ["derive"] }
 serde_json = "1.0.117"
-anyhow = "1"
-
-hyper = "1"
-hyper-util = { version = "0.1.5", features = [
-    "client",
-    "client-legacy",
-    "http1",
-    "http2",
-    "tokio",
-] }
-hyper-tls = "0.6.0"
-http-body-util = "0.1.2"
 chrono = { version = "0.4.38", default-features = false }
+http-body-util = { version = "0.1.2" }
+hyper = { version = "1", features = ["client", "http2"] }
+
+
+# dependencies used by the default client
+hyper-util = { version = "0.1.5", features = ["tokio"], optional = true }
+tokio = { version = "1.40.0", default-features = false, features = [
+    "time",
+], optional = true }
+rustls = { version = "0.23.20", optional = true }
+tokio-rustls = { version = "0.26.1", optional = true }
+rustls-platform-verifier = { version = "0.5.0", optional = true }
+cookie = { version = "0.18.1", optional = true }
+
 
 [dev-dependencies]
+anyhow = "1"
 tokio = { version = "1.40.0", features = [
     "macros",
     "net",
     "time",
     "rt-multi-thread",
 ] }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

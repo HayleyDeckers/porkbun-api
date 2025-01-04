@@ -1,28 +1,86 @@
+//! # porkbun-api
+//!
+//! this crate provides an async implementation of [porkbun](https://porkbun.com)'s domain management [api](https://porkbun.com/api/json/v3/documentation).
+//! It provides a transport-agnostic [Client], and a [DefaultTransport] based on hyper suitable for use in tokio-based applications.
+//!
+//! ## example
+//!
+//! ```
+//! #[tokio::main]
+//! async fn main() -> porkbun_api::Result<()> {
+//!     let api_key = porkbun_api::ApiKey::new("secret", "api_key");
+//!     let client = porkbun_api::Client::new(api_key);
+//!
+//!     let domain = &client.domains().await?[0].domain;
+//!     let subdomain = Some("my.ip");
+//!     let my_ip = client.ping().await?;
+//!     let record = CreateOrEditDnsRecord::A_or_AAAA(subdomain, my_ip);
+//!     let id = client.create(domain, record).await?;
+//!     println!("added record {id}");
+//!     client.delete(domain, &id).await?;
+//!     println!("removed record {id}");
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Features
+//!
+//! - `default-client` enabled by default. Includes a default transport layer implementation for the [Client]. This can be disabled if you are implementing your own.
+//!
+//! ## known issues
+//!
+//! Hostnames are a subset of DNS names. `🦆.example.com` is a valid DNS name for example, but it is not a valid hostname.
+//! The porkbun api _will_ let you set an entry for  `🦆.example.com`, but if you then try to query it, it will be returned as `??.example.com`. This can obvious lead to breakage.
+//!
+//! The porkbun api server can also be quite slow, sometimes taking several seconds before it accepts an api call. Keep this in mind when integrating this library within a larger application.
+
+#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 mod serde_util;
+
+#[cfg(feature = "default-client")]
+mod transport;
+#[cfg(feature = "default-client")]
+pub use transport::DefaultTransport;
 mod uri;
 
-use anyhow::Result;
 use chrono::NaiveDateTime;
-use http_body_util::BodyExt;
-use hyper::{body::Bytes, header::HeaderValue, Request, StatusCode, Uri};
-use hyper_tls::HttpsConnector;
-use hyper_util::{
-    client::legacy::{connect::HttpConnector, Client as HyperClient},
-    rt::TokioExecutor,
+use http_body_util::{BodyExt, Full};
+use hyper::{
+    body::{Body, Bytes},
+    Request, Response, StatusCode, Uri,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    cell::OnceCell,
+    borrow::Cow,
     collections::HashMap,
     fmt::Display,
     future::Future,
-    net::{IpAddr, Ipv4Addr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    time::Duration,
 };
 
-#[derive(Deserialize, Serialize)]
+pub trait MakeRequest: Sized {
+    type Body: Body;
+    type Error: std::error::Error + Send + Sync + 'static;
+    fn request(
+        &self,
+        request: Request<Full<Bytes>>,
+    ) -> impl Future<Output = std::result::Result<Response<Self::Body>, Self::Error>>;
+}
+
+#[derive(Deserialize, Serialize, Clone)]
 pub struct ApiKey {
     secretapikey: String,
     apikey: String,
+}
+
+impl ApiKey {
+    pub fn new(secret: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self {
+            secretapikey: secret.into(),
+            apikey: api_key.into(),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -45,7 +103,7 @@ enum ApiResponse<T> {
     Error(ApiError),
 }
 
-impl<T> From<ApiResponse<T>> for Result<T, ApiError> {
+impl<T> From<ApiResponse<T>> for std::result::Result<T, ApiError> {
     fn from(value: ApiResponse<T>) -> Self {
         match value {
             ApiResponse::Success(s) => Ok(s),
@@ -53,6 +111,64 @@ impl<T> From<ApiResponse<T>> for Result<T, ApiError> {
         }
     }
 }
+
+#[derive(Debug)]
+pub enum Error {
+    ApiError {
+        status: StatusCode,
+        error: Option<ApiError>,
+    },
+    TransportError(Box<dyn std::error::Error + Send + Sync + 'static>),
+    SerializationError(serde_json::Error),
+    DeserializationError(serde_json::Error),
+    InvalidUri(hyper::http::uri::InvalidUri),
+}
+
+impl From<(StatusCode, ApiError)> for Error {
+    fn from(value: (StatusCode, ApiError)) -> Self {
+        Self::ApiError {
+            status: value.0,
+            error: Some(value.1),
+        }
+    }
+}
+
+impl From<hyper::http::uri::InvalidUri> for Error {
+    fn from(value: hyper::http::uri::InvalidUri) -> Self {
+        Self::InvalidUri(value)
+    }
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiError { status, error } => {
+                if let Some(error) = error {
+                    f.write_fmt(format_args!("[{status}] {error}"))
+                } else {
+                    f.write_fmt(format_args!("Invalid status code {status}"))
+                }
+            }
+            Self::DeserializationError(_) => f.write_str("failed to deserialize response"),
+            Self::SerializationError(_) => f.write_str("failed to serialize request"),
+            Self::TransportError(_) => f.write_str("failed to send request or recieve response"),
+            Self::InvalidUri(_) => f.write_str("invalid uri"),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::ApiError { .. } => None,
+            Self::TransportError(t) => Some(t.as_ref()),
+            Self::SerializationError(s) | Self::DeserializationError(s) => Some(s),
+            Self::InvalidUri(u) => Some(u),
+        }
+    }
+}
+
+pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum DnsRecordType {
@@ -97,26 +213,70 @@ pub struct CreateOrEditDnsRecord<'a> {
     pub subdomain: Option<&'a str>,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
-    pub content: &'a str,
+    pub content: Cow<'a, str>,
     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
-    pub ttl: Option<u32>,
+    pub ttl: Option<u64>,
     //these get returned as strings, might be we can set these to non-standard values?
-    pub prio: Option<u32>,
+    pub prio: u32,
     // you'd expect a comment field here, but its missing from the api 🥲
     // doesn't seem to be notes, note, or comments
     //todo: ask if there is an api? the web interface seems to use a different api. including one with bulk mgmt
 }
 
+impl<'a> CreateOrEditDnsRecord<'a> {
+    pub fn new(
+        subdomain: Option<&'a str>,
+        record_type: DnsRecordType,
+        content: impl Into<Cow<'a, str>>,
+    ) -> Self {
+        Self {
+            subdomain,
+            record_type,
+            content: content.into(),
+            ttl: None,
+            prio: 0,
+        }
+    }
+    #[allow(non_snake_case)]
+    pub fn A(subdomain: Option<&'a str>, ip: Ipv4Addr) -> Self {
+        Self::new(subdomain, DnsRecordType::A, Cow::Owned(ip.to_string()))
+    }
+    #[allow(non_snake_case)]
+    pub fn AAAA(subdomain: Option<&'a str>, ip: Ipv6Addr) -> Self {
+        Self::new(subdomain, DnsRecordType::AAAA, Cow::Owned(ip.to_string()))
+    }
+    #[allow(non_snake_case)]
+    pub fn A_or_AAAA(subdomain: Option<&'a str>, ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(my_ip) => Self::A(subdomain, my_ip),
+            IpAddr::V6(my_ip) => Self::AAAA(subdomain, my_ip),
+        }
+    }
+
+    #[must_use]
+    pub fn with_ttl(self, ttl: Option<Duration>) -> Self {
+        Self {
+            ttl: ttl.as_ref().map(Duration::as_secs),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn with_priority(self, prio: u32) -> Self {
+        Self { prio, ..self }
+    }
+}
+
 //create, or edit with a domain/subdomain/type in the url.
 // maybe we want to merge this with the CreateOrEditDnsRecord into a single struct with an enum for giving identifier as either
 // a domain/id pair or domain/subdomain/type and picking the appropriate url/body in the client
-#[derive(Serialize)]
-pub struct EditDnsRecordByDomainTypeSubdomain<'a> {
-    pub content: &'a str,
-    /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
-    pub ttl: Option<u32>,
-    pub prio: Option<u32>,
-}
+// #[derive(Serialize)]
+// struct EditDnsRecordByDomainTypeSubdomain<'a> {
+//     pub content: &'a str,
+//     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
+//     pub ttl: Option<u32>,
+//     pub prio: Option<u32>,
+// }
 
 //might be an integer actually but sometimes sends a string
 // so we opt to store it as a string just in case it can start with
@@ -124,24 +284,24 @@ pub struct EditDnsRecordByDomainTypeSubdomain<'a> {
 // todo: ask about this
 #[derive(Deserialize, Debug)]
 struct EntryId {
-    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
+    #[serde(with = "serde_util::string_or_int")]
     id: String,
 }
 
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
-    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
+    #[serde(with = "serde_util::string_or_int")]
     pub id: String,
     pub name: String,
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
     pub content: String,
     //string in docs
-    #[serde(deserialize_with = "serde_util::optionintfromstr::deserialize")]
-    pub ttl: Option<u64>,
+    #[serde(with = "serde_util::u64_from_string_or_int")]
+    pub ttl: u64,
     //string in docs
-    #[serde(deserialize_with = "serde_util::optionintfromstr::deserialize")]
-    pub prio: Option<u64>,
+    #[serde(default, with = "serde_util::u64_from_string_or_int")]
+    pub prio: u64,
     pub notes: Option<String>,
 }
 
@@ -210,7 +370,7 @@ struct DomainListAll {
 
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct DomainListAllResponse {
+struct DomainListAllResponse {
     domains: Vec<DomainListAllDomain>,
 }
 
@@ -270,28 +430,28 @@ pub enum ForwardType {
     Permanent,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct GetUrlForwardingResponse {
-    forwards: Vec<Forward>,
-}
+// #[derive(Deserialize, Debug)]
+// #[serde(rename_all = "camelCase")]
+// struct GetUrlForwardingResponse {
+//     forwards: Vec<Forward>,
+// }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct Forward {
-    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
-    pub id: String,
-    #[serde(flatten)]
-    pub forward: DomainAddForwardUrl,
-}
+// #[derive(Deserialize, Debug)]
+// #[serde(rename_all = "camelCase")]
+// pub struct Forward {
+//     #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
+//     pub id: String,
+//     #[serde(flatten)]
+//     pub forward: DomainAddForwardUrl,
+// }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
-pub struct SslBundle {
-    pub certificate_chain: String,
-    pub private_key: String,
-    pub public_key: String,
-}
+// #[derive(Deserialize, Debug)]
+// #[serde(rename_all = "lowercase")]
+// pub struct SslBundle {
+//     pub certificate_chain: String,
+//     pub private_key: String,
+//     pub public_key: String,
+// }
 
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
@@ -301,86 +461,110 @@ struct WithApiKeys<'a, T: Serialize> {
     inner: T,
 }
 
-/// interface trait for the transport layer
-pub trait Post {
-    fn post<T: Serialize, D: for<'a> Deserialize<'a>>(
-        &self,
-        uri: Uri,
-        body: T,
-    ) -> impl Future<Output = Result<D>>;
-}
-
-pub struct Client<P: Post> {
+#[derive(Clone)]
+pub struct Client<P: MakeRequest> {
     inner: P,
     api_key: ApiKey,
 }
 
+#[cfg(feature = "default-client")]
+// #[doc(cfg(feature = "macros"))]
 impl Client<DefaultTransport> {
+    /// creates a new client using the supplied api key and the default transport implementation.
+    ///
+    /// if you wish to change the transport layer, or you're not using tokio,  use [`new_with_transport`](Client::new_with_transport)
     pub fn new(api_key: ApiKey) -> Self {
-        Self::new_with_transport(api_key, DefaultTransport::new())
+        Client::new_with_transport(api_key, DefaultTransport::default())
     }
 }
 
-impl<P: Post> Client<P> {
-    fn new_with_transport(api_key: ApiKey, transport: P) -> Self {
+impl<T> Client<T>
+where
+    T: MakeRequest,
+    <T::Body as Body>::Error: std::error::Error + Send + Sync + 'static,
+{
+    /// creates a new client using the supplied api key and transport.
+    ///
+    /// if you don't care about the implementation details of the transport, consider using [`new`](Client::new) which uses a default implementation.
+    pub fn new_with_transport(api_key: ApiKey, transport: T) -> Self {
         Self {
             inner: transport,
             api_key,
         }
     }
-    async fn post_with_api_key<T: Serialize, D: for<'a> Deserialize<'a>>(
+    async fn post<D: for<'a> Deserialize<'a>>(&self, uri: Uri, body: Full<Bytes>) -> Result<D> {
+        let request = Request::post(uri).body(body).unwrap(); //both uri and body are known at this point
+        let resp = self
+            .inner
+            .request(request)
+            .await
+            .map_err(|e| Error::TransportError(e.into()))?;
+        let (head, body) = resp.into_parts();
+        let bytes = body
+            .collect()
+            .await
+            .map_err(|e| Error::TransportError(e.into()))?
+            .to_bytes();
+        let result = std::result::Result::<_, ApiError>::from(
+            serde_json::from_slice::<ApiResponse<_>>(&bytes)
+                .map_err(|e| Error::DeserializationError(e))?,
+        );
+
+        match (head.status, result) {
+            (status, Err(error)) => Err(Error::ApiError {
+                status,
+                error: Some(error),
+            }),
+            (StatusCode::OK, Ok(x)) => Ok(x),
+            (status, Ok(_)) => Err(Error::ApiError {
+                status,
+                error: None,
+            }),
+        }
+    }
+    async fn post_with_api_key<S: Serialize, D: for<'a> Deserialize<'a>>(
         &self,
         uri: Uri,
-        body: T,
+        body: S,
     ) -> Result<D> {
         let with_api_key = WithApiKeys {
             api_key: &self.api_key,
             inner: body,
         };
-        self.inner.post(uri, with_api_key).await
+        let json =
+            serde_json::to_string(&with_api_key).map_err(|e| Error::SerializationError(e))?;
+        let body = http_body_util::Full::new(Bytes::from(json));
+        self.post(uri, body).await
     }
 
+    /// pings the api servers returning your ip address.
     pub async fn ping(&self) -> Result<IpAddr> {
         let ping: PingResponse = self.post_with_api_key(uri::ping(), ()).await?;
         Ok(ping.your_ip)
     }
 
-    pub async fn ping_v4(&self) -> Result<Ipv4Addr> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct PingV4Response {
-            your_ip: Ipv4Addr,
-            //xForwardedFor is returned here too?
-        }
-        let ping: PingV4Response = self.post_with_api_key(uri::ping_v4(), ()).await?;
-        Ok(ping.your_ip)
-    }
-
-    //note: does not require authentication
+    ///
+    //note: does not require authentication, can probably be a get?
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>> {
-        let resp: DomainPricingResponse = self.inner.post(uri::domain_pricing(), ()).await?;
+        let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
         Ok(resp.pricing)
     }
 
-    pub async fn update_ns_for_domain(
-        &self,
-        domain: &str,
-        name_servers: Vec<String>,
-    ) -> Result<()> {
+    pub async fn update_nameservers(&self, domain: &str, name_servers: Vec<String>) -> Result<()> {
         self.post_with_api_key(
             uri::update_name_servers(domain)?,
             UpdateNameServers { ns: name_servers },
         )
         .await
     }
-    pub async fn get_ns_for_domain(&self, domain: &str) -> Result<Vec<String>> {
+    pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>> {
         let resp: UpdateNameServers = self
             .post_with_api_key(uri::get_name_servers(domain)?, ())
             .await?;
         Ok(resp.ns)
     }
 
-    pub async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
+    async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
         let resp: DomainListAllResponse = self
             .post_with_api_key(
                 uri::domain_list_all(),
@@ -393,7 +577,7 @@ impl<P: Post> Client<P> {
         Ok(resp.domains)
     }
 
-    pub async fn list_all_domains(&self) -> Result<Vec<DomainListAllDomain>> {
+    pub async fn domains(&self) -> Result<Vec<DomainListAllDomain>> {
         let mut all = self.list_domains(0).await?;
         let mut last_len = all.len();
         // if paginated by 1000, we could probably get away with checking if equal to 1000 and skipping the final check
@@ -405,157 +589,95 @@ impl<P: Post> Client<P> {
         Ok(all)
     }
 
-    pub async fn add_url_forward(&self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
-        self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
-            .await
-    }
+    // pub async fn add_url_forward(&mut self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
+    //     self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
+    //         .await
+    // }
 
-    pub async fn get_url_forward(&self, domain: &str) -> Result<Vec<Forward>> {
-        let resp: GetUrlForwardingResponse = self
-            .post_with_api_key(uri::get_url_forward(domain)?, ())
-            .await?;
-        Ok(resp.forwards)
-    }
+    // pub async fn get_url_forward(&mut self, domain: &str) -> Result<Vec<Forward>> {
+    //     let resp: GetUrlForwardingResponse = self
+    //         .post_with_api_key(uri::get_url_forward(domain)?, ())
+    //         .await?;
+    //     Ok(resp.forwards)
+    // }
 
-    // should we type this?
-    pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<()> {
-        self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
-            .await
-    }
+    // pub async fn delete_url_forward(&mut self, domain: &str, id: &str) -> Result<()> {
+    //     self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
+    //         .await
+    // }
 
-    pub async fn make_dns_record(
-        &self,
-        domain: &str,
-        cmd: CreateOrEditDnsRecord<'_>,
-    ) -> Result<String> {
+    pub async fn create(&self, domain: &str, cmd: CreateOrEditDnsRecord<'_>) -> Result<String> {
         let resp: EntryId = self
             .post_with_api_key(uri::create_dns_record(domain)?, cmd)
             .await?;
         Ok(resp.id)
     }
 
-    pub async fn edit_dns_record(
-        &self,
-        domain: &str,
-        id: &str,
-        cmd: CreateOrEditDnsRecord<'_>,
-    ) -> Result<()> {
+    pub async fn edit(&self, domain: &str, id: &str, cmd: CreateOrEditDnsRecord<'_>) -> Result<()> {
         self.post_with_api_key(uri::edit_dns_record(domain, id)?, cmd)
             .await
     }
-    pub async fn edit_dns_record_for(
-        &self,
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-        cmd: EditDnsRecordByDomainTypeSubdomain<'_>,
-    ) -> Result<()> {
-        self.post_with_api_key(
-            uri::edit_dns_record_for(domain, record_type, subdomain)?,
-            cmd,
-        )
-        .await
-    }
 
-    pub async fn delete_dns_record_for(
-        &self,
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-    ) -> Result<()> {
-        self.post_with_api_key(
-            uri::delete_dns_record_for(domain, record_type, subdomain)?,
-            (),
-        )
-        .await
-    }
+    // async fn edit_dns_record_for(
+    //     &mut self,
+    //     domain: &str,
+    //     record_type: DnsRecordType,
+    //     subdomain: Option<&str>,
+    //     cmd: EditDnsRecordByDomainTypeSubdomain<'_>,
+    // ) -> Result<()> {
+    //     self.post_with_api_key(
+    //         uri::edit_dns_record_for(domain, record_type, subdomain)?,
+    //         cmd,
+    //     )
+    //     .await
+    // }
 
-    pub async fn delete_dns_record_by_id(&self, domain: &str, id: &str) -> Result<()> {
+    // async fn delete_dns_record_for(
+    //     &mut self,
+    //     domain: &str,
+    //     record_type: DnsRecordType,
+    //     subdomain: Option<&str>,
+    // ) -> Result<()> {
+    //     self.post_with_api_key(
+    //         uri::delete_dns_record_for(domain, record_type, subdomain)?,
+    //         (),
+    //     )
+    //     .await
+    // }
+
+    pub async fn delete(&self, domain: &str, id: &str) -> Result<()> {
         self.post_with_api_key(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
     }
 
-    pub async fn get_dns_record_by_domain_and_id(
-        &self,
-        domain: &str,
-        id: Option<&str>,
-    ) -> Result<Vec<DnsEntry>> {
+    pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
-            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, id)?, ())
-            .await?;
-        Ok(rsp.records)
-    }
-    pub async fn get_dns_record_for(
-        &self,
-        domain: &str,
-        record_type: DnsRecordType,
-        subdomain: Option<&str>,
-    ) -> Result<Vec<DnsEntry>> {
-        let rsp: DnsRecordsByDomainOrIDResponse = self
-            .post_with_api_key(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
             .await?;
         Ok(rsp.records)
     }
 
-    pub async fn get_ssl_bundle(&self, domain: &str) -> Result<SslBundle> {
-        self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
-            .await
+    pub async fn get_single(&self, domain: &str, id: &str) -> Result<Option<DnsEntry>> {
+        let rsp: DnsRecordsByDomainOrIDResponse = self
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(&domain, Some(id))?, ())
+            .await?;
+        let rsp = rsp.records.into_iter().next();
+        Ok(rsp)
     }
-}
+    // async fn get_dns_record_for(
+    //     &mut self,
+    //     domain: &str,
+    //     record_type: DnsRecordType,
+    //     subdomain: Option<&str>,
+    // ) -> Result<Vec<DnsEntry>> {
+    //     let rsp: DnsRecordsByDomainOrIDResponse = self
+    //         .post_with_api_key(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
+    //         .await?;
+    //     Ok(rsp.records)
+    // }
 
-pub struct DefaultTransport {
-    hyper: HyperClient<hyper_tls::HttpsConnector<HttpConnector>, http_body_util::Full<Bytes>>,
-    //stores the first (session) cookie it sees and then adds it to all future requests
-    session: OnceCell<HeaderValue>,
-}
-
-impl DefaultTransport {
-    pub(crate) fn new() -> Self {
-        Self {
-            hyper: HyperClient::builder(TokioExecutor::new()).build(HttpsConnector::new()),
-            session: OnceCell::new(),
-        }
-    }
-}
-
-impl Post for DefaultTransport {
-    async fn post<T: Serialize, D: for<'a> Deserialize<'a>>(&self, uri: Uri, body: T) -> Result<D> {
-        let json = serde_json::to_string(&body)?;
-        let body_bytes = http_body_util::Full::new(Bytes::from(json));
-
-        let req = if let Some(cookie) = self.session.get() {
-            Request::post(uri.clone()).header(hyper::header::COOKIE, cookie)
-        } else {
-            Request::post(uri.clone())
-        }
-        .body(body_bytes)?;
-        // todo:
-        // docs say that "Any HTTP response code other than 200 is an error", experimentally 502 is used as a rate-limiter
-        // so we retry on 502's. This is not-great from a rate-limiting perspective but we don't want to block the async thread.
-        // sorry porkbun
-        //   we might also want to follow redirects. Docs says their errors, technically, but would future proof against them ever moving the api endpoint
-        let resp = loop {
-            let resp = self.hyper.request(req.clone()).await?;
-            if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
-                break resp;
-            } else {
-                // println!("received 502, trying again...");
-            }
-        };
-        if self.session.get().is_none() {
-            if let Some(Ok(cookie)) = resp
-                .headers()
-                .get(hyper::header::SET_COOKIE)
-                .map(HeaderValue::to_str)
-            {
-                let value = cookie.split_once(';').unwrap().0;
-                self.session
-                    .set(HeaderValue::from_str(value).unwrap())
-                    .unwrap()
-            }
-        }
-        let bytes = resp.into_body().collect().await?.to_bytes();
-        Result::<_, ApiError>::from(serde_json::from_slice::<ApiResponse<_>>(&bytes)?)
-            .map_err(|e| anyhow::anyhow!(e))
-    }
+    // async fn get_ssl_bundle(&mut self, domain: &str) -> Result<SslBundle> {
+    //     self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
+    //         .await
+    // }
 }
