@@ -37,37 +37,31 @@
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 mod serde_util;
 
+pub mod transport;
 #[cfg(feature = "default-client")]
-mod transport;
-#[cfg(feature = "default-client")]
-pub use transport::DefaultTransport;
+use transport::DefaultTransport;
+use transport::MakeRequest;
+mod error;
+pub use error::Error;
+use error::{ApiErrorMessage, ApiResponse, ErrorImpl};
 mod uri;
 
 use chrono::NaiveDateTime;
 use http_body_util::{BodyExt, Full};
 use hyper::{
     body::{Body, Bytes},
-    Request, Response, StatusCode, Uri,
+    Request, StatusCode, Uri,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::HashMap,
     fmt::Display,
-    future::Future,
     net::{IpAddr, Ipv4Addr, Ipv6Addr},
     time::Duration,
 };
 
-pub trait MakeRequest: Sized {
-    type Body: Body;
-    type Error: std::error::Error + Send + Sync + 'static;
-    fn request(
-        &self,
-        request: Request<Full<Bytes>>,
-    ) -> impl Future<Output = std::result::Result<Response<Self::Body>, Self::Error>>;
-}
-
+/// Holds the credentials needed to access the API
 #[derive(Deserialize, Serialize, Clone)]
 pub struct ApiKey {
     secretapikey: String,
@@ -82,93 +76,6 @@ impl ApiKey {
         }
     }
 }
-
-#[derive(Deserialize, Debug)]
-pub struct ApiError {
-    message: String,
-}
-
-impl Display for ApiError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.message.fmt(f)
-    }
-}
-
-impl std::error::Error for ApiError {}
-
-#[derive(Deserialize, Debug)]
-#[serde(tag = "status", rename_all = "UPPERCASE")]
-enum ApiResponse<T> {
-    Success(T),
-    Error(ApiError),
-}
-
-impl<T> From<ApiResponse<T>> for std::result::Result<T, ApiError> {
-    fn from(value: ApiResponse<T>) -> Self {
-        match value {
-            ApiResponse::Success(s) => Ok(s),
-            ApiResponse::Error(e) => Err(e),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Error {
-    ApiError {
-        status: StatusCode,
-        error: Option<ApiError>,
-    },
-    TransportError(Box<dyn std::error::Error + Send + Sync + 'static>),
-    SerializationError(serde_json::Error),
-    DeserializationError(serde_json::Error),
-    InvalidUri(hyper::http::uri::InvalidUri),
-}
-
-impl From<(StatusCode, ApiError)> for Error {
-    fn from(value: (StatusCode, ApiError)) -> Self {
-        Self::ApiError {
-            status: value.0,
-            error: Some(value.1),
-        }
-    }
-}
-
-impl From<hyper::http::uri::InvalidUri> for Error {
-    fn from(value: hyper::http::uri::InvalidUri) -> Self {
-        Self::InvalidUri(value)
-    }
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ApiError { status, error } => {
-                if let Some(error) = error {
-                    f.write_fmt(format_args!("[{status}] {error}"))
-                } else {
-                    f.write_fmt(format_args!("Invalid status code {status}"))
-                }
-            }
-            Self::DeserializationError(_) => f.write_str("failed to deserialize response"),
-            Self::SerializationError(_) => f.write_str("failed to serialize request"),
-            Self::TransportError(_) => f.write_str("failed to send request or recieve response"),
-            Self::InvalidUri(_) => f.write_str("invalid uri"),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::ApiError { .. } => None,
-            Self::TransportError(t) => Some(t.as_ref()),
-            Self::SerializationError(s) | Self::DeserializationError(s) => Some(s),
-            Self::InvalidUri(u) => Some(u),
-        }
-    }
-}
-
-pub type Result<T> = ::std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum DnsRecordType {
@@ -481,7 +388,7 @@ impl Client<DefaultTransport> {
 impl<T> Client<T>
 where
     T: MakeRequest,
-    <T::Body as Body>::Error: std::error::Error + Send + Sync + 'static,
+    <T::Body as Body>::Error: Into<T::Error>,
 {
     /// creates a new client using the supplied api key and transport.
     ///
@@ -492,79 +399,83 @@ where
             api_key,
         }
     }
-    async fn post<D: for<'a> Deserialize<'a>>(&self, uri: Uri, body: Full<Bytes>) -> Result<D> {
+    async fn post<D: for<'a> Deserialize<'a>>(
+        &self,
+        uri: Uri,
+        body: Full<Bytes>,
+    ) -> Result<D, Error<T::Error>> {
         let request = Request::post(uri).body(body).unwrap(); //both uri and body are known at this point
         let resp = self
             .inner
             .request(request)
             .await
-            .map_err(|e| Error::TransportError(e.into()))?;
+            .map_err(ErrorImpl::TransportError)?;
         let (head, body) = resp.into_parts();
         let bytes = body
             .collect()
             .await
-            .map_err(|e| Error::TransportError(e.into()))?
+            .map_err(|e| ErrorImpl::TransportError(e.into()))?
             .to_bytes();
-        let result = std::result::Result::<_, ApiError>::from(
+        let result = std::result::Result::<_, ApiErrorMessage>::from(
             serde_json::from_slice::<ApiResponse<_>>(&bytes)
-                .map_err(|e| Error::DeserializationError(e))?,
+                .map_err(|e| ErrorImpl::DeserializationError(e))?,
         );
 
         match (head.status, result) {
-            (status, Err(error)) => Err(Error::ApiError {
-                status,
-                error: Some(error),
-            }),
             (StatusCode::OK, Ok(x)) => Ok(x),
-            (status, Ok(_)) => Err(Error::ApiError {
-                status,
-                error: None,
-            }),
+            (status, maybe_message) => Err((status, maybe_message.err()).into()),
         }
     }
     async fn post_with_api_key<S: Serialize, D: for<'a> Deserialize<'a>>(
         &self,
         uri: Uri,
         body: S,
-    ) -> Result<D> {
+    ) -> Result<D, Error<T::Error>> {
         let with_api_key = WithApiKeys {
             api_key: &self.api_key,
             inner: body,
         };
         let json =
-            serde_json::to_string(&with_api_key).map_err(|e| Error::SerializationError(e))?;
+            serde_json::to_string(&with_api_key).map_err(|e| ErrorImpl::SerializationError(e))?;
         let body = http_body_util::Full::new(Bytes::from(json));
         self.post(uri, body).await
     }
 
     /// pings the api servers returning your ip address.
-    pub async fn ping(&self) -> Result<IpAddr> {
+    pub async fn ping(&self) -> Result<IpAddr, Error<T::Error>> {
         let ping: PingResponse = self.post_with_api_key(uri::ping(), ()).await?;
         Ok(ping.your_ip)
     }
 
     ///
     //note: does not require authentication, can probably be a get?
-    pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>> {
+    pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>, Error<T::Error>> {
         let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
         Ok(resp.pricing)
     }
 
-    pub async fn update_nameservers(&self, domain: &str, name_servers: Vec<String>) -> Result<()> {
+    pub async fn update_nameservers(
+        &self,
+        domain: &str,
+        name_servers: Vec<String>,
+    ) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(
             uri::update_name_servers(domain)?,
             UpdateNameServers { ns: name_servers },
         )
         .await
     }
-    pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>> {
+    pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>, Error<T::Error>> {
         let resp: UpdateNameServers = self
             .post_with_api_key(uri::get_name_servers(domain)?, ())
             .await?;
         Ok(resp.ns)
     }
 
-    async fn list_domains(&self, offset: usize) -> Result<Vec<DomainListAllDomain>> {
+    async fn list_domains(
+        &self,
+        offset: usize,
+    ) -> Result<Vec<DomainListAllDomain>, Error<T::Error>> {
         let resp: DomainListAllResponse = self
             .post_with_api_key(
                 uri::domain_list_all(),
@@ -577,7 +488,7 @@ where
         Ok(resp.domains)
     }
 
-    pub async fn domains(&self) -> Result<Vec<DomainListAllDomain>> {
+    pub async fn domains(&self) -> Result<Vec<DomainListAllDomain>, Error<T::Error>> {
         let mut all = self.list_domains(0).await?;
         let mut last_len = all.len();
         // if paginated by 1000, we could probably get away with checking if equal to 1000 and skipping the final check
@@ -606,14 +517,23 @@ where
     //         .await
     // }
 
-    pub async fn create(&self, domain: &str, cmd: CreateOrEditDnsRecord<'_>) -> Result<String> {
+    pub async fn create(
+        &self,
+        domain: &str,
+        cmd: CreateOrEditDnsRecord<'_>,
+    ) -> Result<String, Error<T::Error>> {
         let resp: EntryId = self
             .post_with_api_key(uri::create_dns_record(domain)?, cmd)
             .await?;
         Ok(resp.id)
     }
 
-    pub async fn edit(&self, domain: &str, id: &str, cmd: CreateOrEditDnsRecord<'_>) -> Result<()> {
+    pub async fn edit(
+        &self,
+        domain: &str,
+        id: &str,
+        cmd: CreateOrEditDnsRecord<'_>,
+    ) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::edit_dns_record(domain, id)?, cmd)
             .await
     }
@@ -645,19 +565,23 @@ where
     //     .await
     // }
 
-    pub async fn delete(&self, domain: &str, id: &str) -> Result<()> {
+    pub async fn delete(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
     }
 
-    pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>> {
+    pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>, Error<T::Error>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
             .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
             .await?;
         Ok(rsp.records)
     }
 
-    pub async fn get_single(&self, domain: &str, id: &str) -> Result<Option<DnsEntry>> {
+    pub async fn get_single(
+        &self,
+        domain: &str,
+        id: &str,
+    ) -> Result<Option<DnsEntry>, Error<T::Error>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
             .post_with_api_key(uri::get_dns_record_by_domain_and_id(&domain, Some(id))?, ())
             .await?;

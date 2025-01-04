@@ -1,6 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use porkbun_api::{ApiKey, CreateOrEditDnsRecord, DefaultTransport, DnsRecordType};
+use porkbun_api::{transport::DefaultTransport, ApiKey, CreateOrEditDnsRecord, DnsRecordType};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
