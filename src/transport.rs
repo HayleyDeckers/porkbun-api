@@ -7,8 +7,13 @@ use std::future::Future;
 
 /// A trait representing an HTTP request-response action. This trait needs to be implemented by a type in order to be used as a transport layer by the [Client](crate::Client).
 pub trait MakeRequest: Sized {
+    /// The HTTP body type of the returned response.
+    /// In order for a type to be useable as a transport layer for the [Client](crate::Client)
+    /// `Body::Error` has to implement `Into<Self::Error>`.
     type Body: Body;
+    /// The error type this interface can return
     type Error: std::error::Error + Send + Sync + 'static;
+    /// Perform an HTTP request, returning a response asynchronously.
     fn request(
         &self,
         request: Request<Full<Bytes>>,
@@ -18,13 +23,13 @@ pub trait MakeRequest: Sized {
 #[cfg(feature = "default-client")]
 mod default_impl {
     use super::MakeRequest;
-    use cookie::Cookie;
+    use cookie::time::OffsetDateTime;
+    use cookie::{Cookie, CookieJar};
     use http_body_util::Full;
     use hyper::client::conn::http2::Builder as Http2Builder;
     use hyper::{
         body::{Bytes, Incoming},
         client::conn::http2::SendRequest,
-        header::{HeaderValue, COOKIE},
         Request, Response, StatusCode,
     };
     use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -33,10 +38,13 @@ mod default_impl {
         error::Error,
         fmt::{Debug, Display},
         future::Future,
-        sync::{Arc, OnceLock},
+        sync::Arc,
         time::Duration,
     };
-    use tokio::{net::TcpStream, sync::Mutex};
+    use tokio::{
+        net::TcpStream,
+        sync::{Mutex, RwLock},
+    };
     use tokio_rustls::TlsConnector;
 
     struct Http2Only {
@@ -163,47 +171,95 @@ mod default_impl {
         }
     }
 
-    struct TrackSession<T> {
+    /// A structure that tracks cookies for requests and responses.
+    ///
+    /// This structure manages cookies according to [RFC 6265](https://datatracker.ietf.org/doc/html/rfc6265).
+    /// it is not fully compliant (it doesn't check the secure flag, doesn't purge expired entries)
+    /// but should be good enough for just talking to porkbun.
+    pub struct TrackCookies<T> {
         inner: T,
-        session: OnceLock<HeaderValue>,
+        cookie_jar: RwLock<CookieJar>,
     }
 
-    impl<T: MakeRequest> TrackSession<T> {
-        fn wrapping(inner: T) -> Self {
+    impl<T> TrackCookies<T> {
+        /// Creates a new `TrackCookies` instance.
+        pub fn wrapping(inner: T) -> Self {
             Self {
                 inner,
-                session: OnceLock::new(),
+                cookie_jar: RwLock::new(CookieJar::new()),
             }
         }
-    }
 
-    impl<T: MakeRequest> MakeRequest for TrackSession<T> {
+        /// Checks if a cookie is valid for the given request.
+        fn is_cookie_valid_for_request(cookie: &Cookie, request: &Request<Full<Bytes>>) -> bool {
+            // Check domain
+            if let Some(domain) = cookie.domain() {
+                if !request.uri().host().unwrap_or("").ends_with(domain) {
+                    return false;
+                }
+            }
+            // Check path
+            if let Some(path) = cookie.path() {
+                if !request.uri().path().starts_with(path) {
+                    return false;
+                }
+            }
+            // Check if the cookie is expired
+            if let Some(expires) = cookie.expires_datetime() {
+                if expires <= OffsetDateTime::now_utc() {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+    impl<T: MakeRequest> MakeRequest for TrackCookies<T> {
         type Body = T::Body;
         type Error = T::Error;
+        /// Makes a request, adding cookies to the request and extracting cookies from the response.
         async fn request(
             &self,
             mut request: Request<Full<Bytes>>,
-        ) -> Result<Response<Self::Body>, Self::Error> {
-            if let Some(session) = self.session.get() {
-                request.headers_mut().append(COOKIE, session.clone());
+        ) -> Result<Response<T::Body>, T::Error> {
+            // Add cookies to the request
+            let cookie_header = {
+                let jar = self.cookie_jar.read().await;
+                jar.iter()
+                    .filter(|cookie| Self::is_cookie_valid_for_request(cookie, &request))
+                    .map(|c| {
+                        let (name, value) = c.name_value_trimmed();
+                        format!("{name}={value}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+
+            if !cookie_header.is_empty() {
+                request
+                    .headers_mut()
+                    .insert(hyper::header::COOKIE, cookie_header.parse().unwrap());
             }
-            match self.inner.request(request).await {
-                Ok(resp) => {
-                    if let Some(cookie) = resp
-                        .headers()
-                        .get_all(hyper::header::SET_COOKIE)
-                        .iter()
-                        .filter_map(|hv| hv.to_str().ok().map(|c| Cookie::parse(c).ok()).flatten())
-                        .find(|c| c.name() == "BUNSESSION2")
-                    {
-                        if let Ok(hv) = HeaderValue::from_str(&cookie.to_string()) {
-                            let _ = self.session.set(hv);
-                        }
-                    }
-                    Ok(resp)
+
+            let response = self.inner.request(request).await?;
+
+            // parse_encoded, parse_split_encoded
+            let cookies = response
+                .headers()
+                .get_all(hyper::header::SET_COOKIE)
+                .iter()
+                .filter_map(|h| h.to_str().ok())
+                .filter_map(|s| Cookie::parse(s).ok())
+                .collect::<Vec<_>>();
+
+            // Extract cookies from the response
+            if !cookies.is_empty() {
+                let mut jar = self.cookie_jar.write().await;
+                for cookie in cookies {
+                    jar.add(cookie.into_owned());
                 }
-                x => x,
             }
+
+            Ok(response)
         }
     }
 
@@ -213,11 +269,11 @@ mod default_impl {
     /// and will retry requests if it receives a response with a 502 statuscode every 250ms, up to a maximum of 10 times.
     ///
     /// this implementation is subject to change in a minor release.
-    pub struct DefaultTransport(Retry502<TrackSession<Http2Only>>);
+    pub struct DefaultTransport(Retry502<TrackCookies<Http2Only>>);
 
     impl Default for DefaultTransport {
         fn default() -> Self {
-            Self(Retry502::wrapping(TrackSession::wrapping(
+            Self(Retry502::wrapping(TrackCookies::wrapping(
                 Http2Only::default(),
             )))
         }
@@ -227,7 +283,7 @@ mod default_impl {
         /// creates a new instance of this transport.
         /// if `force_ipv4` is set to true, it will connect to `api-ipv4.porbun.com` instead of `api.porkbun.com`, forcing the ping command to return an IPv4 address.
         pub fn new(force_ipv4: bool) -> Self {
-            Self(Retry502::wrapping(TrackSession::wrapping(Http2Only::new(
+            Self(Retry502::wrapping(TrackCookies::wrapping(Http2Only::new(
                 force_ipv4,
             ))))
         }
