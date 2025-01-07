@@ -101,9 +101,14 @@ impl<T: std::error::Error + Send + Sync + 'static> std::error::Error for ErrorIm
     }
 }
 
+/// The error type that can be returned by the [Client](crate::Client).
+///
+/// The type `T` is the error type of the transport layer. That is, it is `<Transport as MakeRequest>::Error` for `Client<Transport>`.
 pub struct Error<T: std::error::Error + Send + Sync + 'static>(ErrorImpl<T>);
 
 impl<T: std::error::Error + Send + Sync + 'static> Error<T> {
+    /// Try to turn this error into an underlying transport error, by reference.
+    /// will return `None` if the error was not caused by the transport layer, but was instead a protocol level error.
     pub fn as_transport_error(&self) -> Option<&T> {
         if let ErrorImpl::TransportError(e) = &self.0 {
             Some(e)
@@ -111,7 +116,8 @@ impl<T: std::error::Error + Send + Sync + 'static> Error<T> {
             None
         }
     }
-
+    /// Try to turn this error into an underlying transport error, consuming the error.
+    /// will return `None` if the error was not caused by the transport layer, but was instead a protocol level error.
     pub fn into_transport_error(self) -> Option<T> {
         if let ErrorImpl::TransportError(e) = self.0 {
             Some(e)

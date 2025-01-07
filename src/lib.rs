@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! # porkbun-api
 //!
 //! this crate provides an async implementation of [porkbun](https://porkbun.com)'s domain management [api](https://porkbun.com/api/json/v3/documentation).
@@ -27,12 +28,12 @@
 //!
 //! - `default-client` enabled by default. Includes a default transport layer implementation for the [Client]. This can be disabled if you are implementing your own.
 //!
-//! ## known issues
+//! ## known issues with the porkbun api
 //!
 //! Hostnames are a subset of DNS names. `🦆.example.com` is a valid DNS name for example, but it is not a valid hostname.
-//! The porkbun api _will_ let you set an entry for  `🦆.example.com`, but if you then try to query it, it will be returned as `??.example.com`. This can obvious lead to breakage.
+//! The porkbun api _will_ let you set an entry for `🦆.example.com`, but if you then try to query it, it will be returned as `??.example.com`. This is an issue with the porkbun servers.
 //!
-//! The porkbun api server can also be quite slow, sometimes taking several seconds before it accepts an api call. Keep this in mind when integrating this library within a larger application.
+//! Also, the porkbun api server can also be quite slow, sometimes taking several seconds before it accepts an api call. Keep this in mind when integrating this library within a larger application.
 
 #![cfg_attr(docsrs, feature(doc_auto_cfg))]
 mod serde_util;
@@ -69,6 +70,7 @@ pub struct ApiKey {
 }
 
 impl ApiKey {
+    /// Creates a new [ApiKey] from the given API secret and API key.
     pub fn new(secret: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             secretapikey: secret.into(),
@@ -77,6 +79,8 @@ impl ApiKey {
     }
 }
 
+/// Valid DNS record types
+#[allow(missing_docs)]
 #[derive(Clone, Copy, Deserialize, Serialize, Debug, PartialEq, Eq)]
 pub enum DnsRecordType {
     A,
@@ -112,17 +116,20 @@ impl Display for DnsRecordType {
     }
 }
 
-//create, or edit with a domain/id pair
+/// create, or edit with a DNS record with a domain/id pair
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct CreateOrEditDnsRecord<'a> {
     /// The subdomain for the record being created, not including the domain itself. Leave blank to create a record on the root domain. Use * to create a wildcard record.
     #[serde(rename = "name")]
     pub subdomain: Option<&'a str>,
+    /// The type of record that should be created
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
+    /// The answer content for the record.
     pub content: Cow<'a, str>,
     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
     pub ttl: Option<u64>,
+    /// The priority of the record for those that support it.
     //these get returned as strings, might be we can set these to non-standard values?
     pub prio: u32,
     // you'd expect a comment field here, but its missing from the api 🥲
@@ -131,6 +138,7 @@ pub struct CreateOrEditDnsRecord<'a> {
 }
 
 impl<'a> CreateOrEditDnsRecord<'a> {
+    /// Makes a new [CreateOrEditDnsRecord] for the given subdomain, with the given record type and content.
     pub fn new(
         subdomain: Option<&'a str>,
         record_type: DnsRecordType,
@@ -144,14 +152,17 @@ impl<'a> CreateOrEditDnsRecord<'a> {
             prio: 0,
         }
     }
+    /// Makes a new [CreateOrEditDnsRecord]  for creating an A-record for the given subdomain, with the given IP address as a response.
     #[allow(non_snake_case)]
     pub fn A(subdomain: Option<&'a str>, ip: Ipv4Addr) -> Self {
         Self::new(subdomain, DnsRecordType::A, Cow::Owned(ip.to_string()))
     }
+    /// Makes a new [CreateOrEditDnsRecord] for creating an AAAA-record for the given subdomain, with the given IP address as a response.
     #[allow(non_snake_case)]
     pub fn AAAA(subdomain: Option<&'a str>, ip: Ipv6Addr) -> Self {
         Self::new(subdomain, DnsRecordType::AAAA, Cow::Owned(ip.to_string()))
     }
+    /// Makes a new [CreateOrEditDnsRecord] for creating an A- or AAAA-record (depending on the value of the ip address) for the given subdomain, with the given IP address as a response.
     #[allow(non_snake_case)]
     pub fn A_or_AAAA(subdomain: Option<&'a str>, ip: IpAddr) -> Self {
         match ip {
@@ -160,6 +171,8 @@ impl<'a> CreateOrEditDnsRecord<'a> {
         }
     }
 
+    /// Set the time-to-live for this record.
+    /// The minimum and the default is 600 seconds. Any value less than 600 seconds will be rounded up.
     #[must_use]
     pub fn with_ttl(self, ttl: Option<Duration>) -> Self {
         Self {
@@ -168,6 +181,7 @@ impl<'a> CreateOrEditDnsRecord<'a> {
         }
     }
 
+    /// Set the priority for this record, for records that support it.
     #[must_use]
     pub fn with_priority(self, prio: u32) -> Self {
         Self { prio, ..self }
@@ -195,20 +209,29 @@ struct EntryId {
     id: String,
 }
 
+/// A DNS entry for a domain, returned by the API
 #[derive(Deserialize, Debug)]
 pub struct DnsEntry {
+    /// the unique ID of this entry
     #[serde(with = "serde_util::string_or_int")]
     pub id: String,
+    /// the full name of the entry, e.g. `_atproto.example.com`
     pub name: String,
+    /// the type of record, e.g. A or TXT.
     #[serde(rename = "type")]
     pub record_type: DnsRecordType,
+    /// the content of this record.
     pub content: String,
+    /// the time-to-live of this record
     //string in docs
     #[serde(with = "serde_util::u64_from_string_or_int")]
     pub ttl: u64,
+    /// The priority of this record
     //string in docs
     #[serde(default, with = "serde_util::u64_from_string_or_int")]
     pub prio: u64,
+    /// Any notes set for this record.
+    /// Note that you can not set these from the API itself, you have to do so with the management console on the websiter.
     pub notes: Option<String>,
 }
 
@@ -217,41 +240,23 @@ struct DnsRecordsByDomainOrIDResponse {
     records: Vec<DnsEntry>,
 }
 
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct PingResponse {
-    your_ip: IpAddr,
-}
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum SpecialType {
-    Handshake,
-    //todo: ask about other known values
-    Other(String),
-}
-
-//undocumented
-// #[derive(Deserialize, Debug)]
-// pub struct Coupon {
-//     pub amount: usize,
-//     pub code: String,
-//     #[serde(default, with = "serde_util::yesno")]
-//     pub first_year_only: bool,
-//     pub max_per_user: Option<usize>,
-//     pub r#type: Option<String>,
-// }
-
+/// The default pricing for the registration, renewal and transfer of a given TLD.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Pricing {
+    /// the registration price.
     pub registration: String,
+    /// the renewal price.
     pub renewal: String,
+    /// the transfer price.
     pub transfer: String,
+    /// A field indicating that his is a "special" domain, and if so what kind.
+    /// Currently this only valid version seems to be ["handshake"](https://porkbun.com/handshake)
+    ///
+    /// This field is undocumented by porkbun, but I included it anyways to let people filter out these TLDs.
     //todo: ask
     //undocumented field, helps filter out stupid handshake domains
-    pub special_type: Option<SpecialType>,
-    // undocumented, todo: ask
-    // pub coupons: Vec<Coupon>,
+    pub special_type: Option<String>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -278,64 +283,79 @@ struct DomainListAll {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct DomainListAllResponse {
-    domains: Vec<DomainListAllDomain>,
+    domains: Vec<DomainInfo>,
 }
 
+/// A domain registration returned by the API server
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-pub struct DomainListAllDomain {
+pub struct DomainInfo {
+    /// The registered domain, including the TLD
     pub domain: String,
     // usually ACTIVE or..
+    /// The status of the domain. "ACTIVE" if active,
     pub status: String,
+    /// the TLD of the domain
     pub tld: String,
+    /// The date-time this domain was created
     // ask: what is the TZ of this?
     #[serde(with = "serde_util::datetime")]
     pub create_date: NaiveDateTime,
+    /// The date-time this domain will expire
     #[serde(with = "serde_util::datetime")]
     pub expire_date: NaiveDateTime,
+    /// whether the security lock has been turned on or not
     // docs say these are "1", probably booleans?
     #[serde(with = "serde_util::stringoneintzero")]
     pub security_lock: bool,
     #[serde(with = "serde_util::stringoneintzero")]
+    /// whether whois privacy has been turned on or not
     pub whois_privacy: bool,
+    /// whether auto-renewal is enabled or not
     // docs say this is a bool, is a string
     #[serde(with = "serde_util::stringoneintzero")]
     pub auto_renew: bool,
+    /// whether this is an external domain or not
     #[serde(with = "serde_util::stringoneintzero")]
     pub not_local: bool,
+    /// Any labels that have been assigned to this domain from the web interface
     #[serde(default)]
     pub labels: Vec<Label>,
 }
 
+/// A label added to a domain.
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Label {
+    /// The unique ID of the label
     #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
     pub id: String,
+    /// the name of the label
     pub title: String,
+    /// the color of the label (used in the web interface)
     pub color: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-pub struct DomainAddForwardUrl {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub subdomain: Option<String>,
-    pub location: String,
-    #[serde(rename = "type")]
-    pub forward_type: ForwardType,
-    #[serde(with = "serde_util::yesno")]
-    pub include_path: bool,
-    #[serde(with = "serde_util::yesno")]
-    pub wildcard: bool,
-}
+// #[derive(Serialize, Deserialize, Debug)]
+// #[serde(rename_all = "camelCase")]
+// pub struct DomainAddForwardUrl {
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     pub subdomain: Option<String>,
+//     pub location: String,
+//     #[serde(rename = "type")]
+//     pub forward_type: ForwardType,
+//     #[serde(with = "serde_util::yesno")]
+//     pub include_path: bool,
+//     #[serde(with = "serde_util::yesno")]
+//     pub wildcard: bool,
+// }
 
-#[derive(Deserialize, Serialize, Debug)]
-#[serde(rename_all = "lowercase")]
-pub enum ForwardType {
-    Temporary,
-    Permanent,
-}
+// #[derive(Deserialize, Serialize, Debug)]
+// #[serde(rename_all = "lowercase")]
+// pub enum ForwardType {
+//     Temporary,
+//     Permanent,
+// }
 
 // #[derive(Deserialize, Debug)]
 // #[serde(rename_all = "camelCase")]
@@ -368,14 +388,13 @@ struct WithApiKeys<'a, T: Serialize> {
     inner: T,
 }
 
-#[derive(Clone)]
+/// A client for interfacing with the Porkbun API servers
 pub struct Client<P: MakeRequest> {
     inner: P,
     api_key: ApiKey,
 }
 
 #[cfg(feature = "default-client")]
-// #[doc(cfg(feature = "macros"))]
 impl Client<DefaultTransport> {
     /// creates a new client using the supplied api key and the default transport implementation.
     ///
@@ -443,17 +462,23 @@ where
 
     /// pings the api servers returning your ip address.
     pub async fn ping(&self) -> Result<IpAddr, Error<T::Error>> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PingResponse {
+            your_ip: IpAddr,
+        }
         let ping: PingResponse = self.post_with_api_key(uri::ping(), ()).await?;
         Ok(ping.your_ip)
     }
 
-    ///
-    //note: does not require authentication, can probably be a get?
+    /// Get a mapping of available TLDs to their pricing structure.
+    /// This method does not require authentication, and it will work with any [ApiKey].
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>, Error<T::Error>> {
         let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
         Ok(resp.pricing)
     }
 
+    /// Updates the nameservers for a particular domain
     pub async fn update_nameservers(
         &self,
         domain: &str,
@@ -465,6 +490,8 @@ where
         )
         .await
     }
+
+    /// Gets the configured nameservers for a particular domain
     pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>, Error<T::Error>> {
         let resp: UpdateNameServers = self
             .post_with_api_key(uri::get_name_servers(domain)?, ())
@@ -472,10 +499,7 @@ where
         Ok(resp.ns)
     }
 
-    async fn list_domains(
-        &self,
-        offset: usize,
-    ) -> Result<Vec<DomainListAllDomain>, Error<T::Error>> {
+    async fn list_domains(&self, offset: usize) -> Result<Vec<DomainInfo>, Error<T::Error>> {
         let resp: DomainListAllResponse = self
             .post_with_api_key(
                 uri::domain_list_all(),
@@ -488,7 +512,8 @@ where
         Ok(resp.domains)
     }
 
-    pub async fn domains(&self) -> Result<Vec<DomainListAllDomain>, Error<T::Error>> {
+    /// get all the domains associated with this account
+    pub async fn domains(&self) -> Result<Vec<DomainInfo>, Error<T::Error>> {
         let mut all = self.list_domains(0).await?;
         let mut last_len = all.len();
         // if paginated by 1000, we could probably get away with checking if equal to 1000 and skipping the final check
@@ -517,6 +542,8 @@ where
     //         .await
     // }
 
+    /// Create a new DNS record for the given domain.
+    /// Will fail if there already exists a record with the same name and type.
     pub async fn create(
         &self,
         domain: &str,
@@ -528,6 +555,8 @@ where
         Ok(resp.id)
     }
 
+    /// Edits an existing DNS record for a given domain, by its unique ID.
+    /// IDs can be discovered by first calling [get_all](Client::get_all).
     pub async fn edit(
         &self,
         domain: &str,
@@ -565,11 +594,14 @@ where
     //     .await
     // }
 
+    /// Deletes an existing DNS record for a given domain, by its unique ID.
+    /// IDs can be discovered by first calling [get_all](Client::get_all).
     pub async fn delete(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
     }
 
+    /// Gets all the DNS records for a given domain
     pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>, Error<T::Error>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
             .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
@@ -577,6 +609,7 @@ where
         Ok(rsp.records)
     }
 
+    /// Gets a single DNS record for a given domain, by its unique ID.
     pub async fn get_single(
         &self,
         domain: &str,

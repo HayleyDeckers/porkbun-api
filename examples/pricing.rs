@@ -1,5 +1,3 @@
-use porkbun_api::SpecialType;
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let file = std::fs::File::open("secrets/api_key.json")?;
@@ -7,7 +5,7 @@ async fn main() -> anyhow::Result<()> {
     let client = porkbun_api::Client::new(api_key);
     println!("TLD: registration / renewal / transfer\n-------");
     for (tld, pricing) in client.domain_pricing().await? {
-        if let Some(SpecialType::Handshake) = pricing.special_type {
+        if let Some("handshake") = pricing.special_type.as_deref() {
             continue;
         }
         println!(
