@@ -116,8 +116,8 @@ pub fn get_dns_record_by_domain_and_id(domain: &str, id: Option<&str>) -> Result
 //     })
 // }
 
-// pub fn get_ssl_bundle(domain: &str) -> Result<Uri, InvalidUri> {
-//     Uri::try_from(format!(
-//         "https://api.porkbun.com/api/json/v3/ssl/retrieve/{domain}"
-//     ))
-// }
+pub fn get_ssl_bundle(domain: &str) -> Result<Uri, InvalidUri> {
+    Uri::try_from(format!(
+        "https://api.porkbun.com/api/json/v3/ssl/retrieve/{domain}"
+    ))
+}

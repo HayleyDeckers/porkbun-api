@@ -469,13 +469,19 @@ pub struct ForwardWithID {
     pub config: Forward,
 }
 
-// #[derive(Deserialize, Debug)]
-// #[serde(rename_all = "lowercase")]
-// pub struct SslBundle {
-//     pub certificate_chain: String,
-//     pub private_key: String,
-//     pub public_key: String,
-// }
+/// The SSL certificate bundle for a domain
+#[derive(Deserialize, Debug)]
+pub struct SslBundle {
+    /// The complete certificate chain.
+    #[serde(rename = "certificatechain")]
+    pub certificate_chain: String,
+    /// The private key.
+    #[serde(rename = "privatekey")]
+    pub private_key: String,
+    /// The public key.
+    #[serde(rename = "publickey")]
+    pub public_key: String,
+}
 
 #[derive(Serialize)]
 struct WithApiKeys<'a, T: Serialize> {
@@ -641,7 +647,7 @@ where
     }
 
     /// Get all the url forwards for a given domain
-    pub async fn get_url_forward(
+    pub async fn get_url_forwards(
         &self,
         domain: &str,
     ) -> Result<Vec<ForwardWithID>, Error<T::Error>> {
@@ -748,8 +754,9 @@ where
     //     Ok(rsp.records)
     // }
 
-    // async fn get_ssl_bundle(&mut self, domain: &str) -> Result<SslBundle> {
-    //     self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
-    //         .await
-    // }
+    /// Get the SSL certificate bundle for a given domain
+    pub async fn get_ssl_bundle(&mut self, domain: &str) -> Result<SslBundle, Error<T::Error>> {
+        self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
+            .await
+    }
 }

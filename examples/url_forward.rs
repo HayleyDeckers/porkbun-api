@@ -9,7 +9,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cmd = Forward::new(Some("url_forward"), "example.com");
     client.add_url_forward(&domain, cmd).await?;
-    let url_forwards = client.get_url_forward(domain).await?;
+    let url_forwards = client.get_url_forwards(domain).await?;
     for url in url_forwards {
         println!("{:#?}", url);
         let id = &url.id;
