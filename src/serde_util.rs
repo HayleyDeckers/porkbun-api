@@ -48,8 +48,7 @@ pub mod yesno {
     {
         serializer.serialize_str(match value {
             true => "yes",
-            // value of not-yes not documented
-            false => "false",
+            false => "no",
         })
     }
 

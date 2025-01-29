@@ -387,41 +387,87 @@ pub struct Label {
     pub color: String,
 }
 
-// #[derive(Serialize, Deserialize, Debug)]
-// #[serde(rename_all = "camelCase")]
-// pub struct DomainAddForwardUrl {
-//     #[serde(skip_serializing_if = "Option::is_none")]
-//     pub subdomain: Option<String>,
-//     pub location: String,
-//     #[serde(rename = "type")]
-//     pub forward_type: ForwardType,
-//     #[serde(with = "serde_util::yesno")]
-//     pub include_path: bool,
-//     #[serde(with = "serde_util::yesno")]
-//     pub wildcard: bool,
-// }
+/// A url forwarding configuration
+#[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Forward {
+    /// The subdomain to forward, or None to forward the root domain
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subdomain: Option<String>,
+    /// The location to forward to
+    pub location: String,
+    #[serde(rename = "type")]
+    /// The type of redirect to use (permanent or temporary)
+    pub forward_type: ForwardType,
+    /// Whether to include the path in the forwarded request
+    #[serde(with = "serde_util::yesno")]
+    pub include_path: bool,
+    /// Whether to forward all subdomains
+    #[serde(with = "serde_util::yesno")]
+    pub wildcard: bool,
+}
 
-// #[derive(Deserialize, Serialize, Debug)]
-// #[serde(rename_all = "lowercase")]
-// pub enum ForwardType {
-//     Temporary,
-//     Permanent,
-// }
+impl Forward {
+    /// creates a new [Forward] configuration with the given subdomain and location.
+    /// Sets the forward_type to temporary, includes the path, and does not enable wildcard forwarding.
+    pub fn new(subdomain: Option<impl Into<String>>, to: impl Into<String>) -> Self {
+        Self {
+            subdomain: subdomain.map(|s| s.into()),
+            location: to.into(),
+            forward_type: ForwardType::Temporary,
+            include_path: true,
+            wildcard: false,
+        }
+    }
 
-// #[derive(Deserialize, Debug)]
-// #[serde(rename_all = "camelCase")]
-// struct GetUrlForwardingResponse {
-//     forwards: Vec<Forward>,
-// }
+    /// Enable or disable wildcard forwarding
+    pub fn with_wildcard(self, wildcard: bool) -> Self {
+        Self { wildcard, ..self }
+    }
 
-// #[derive(Deserialize, Debug)]
-// #[serde(rename_all = "camelCase")]
-// pub struct Forward {
-//     #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
-//     pub id: String,
-//     #[serde(flatten)]
-//     pub forward: DomainAddForwardUrl,
-// }
+    /// Include or exclude the path in the forwarded request
+    pub fn include_path(self, include_path: bool) -> Self {
+        Self {
+            include_path,
+            ..self
+        }
+    }
+
+    /// Set the forward type to either temporary or permanent
+    pub fn with_forward_type(self, forward_type: ForwardType) -> Self {
+        Self {
+            forward_type,
+            ..self
+        }
+    }
+}
+
+/// The type of redirect to use
+#[allow(missing_docs)]
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum ForwardType {
+    Temporary,
+    Permanent,
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct GetUrlForwardingResponse {
+    forwards: Vec<ForwardWithID>,
+}
+
+/// An existing url forwarding configuration with an associated ID
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardWithID {
+    /// The unique ID of this forwarding configuration
+    #[serde(deserialize_with = "serde_util::string_or_int::deserialize")]
+    pub id: String,
+    /// The configuration
+    #[serde(flatten, rename = "forward")]
+    pub config: Forward,
+}
 
 // #[derive(Deserialize, Debug)]
 // #[serde(rename_all = "lowercase")]
@@ -588,22 +634,28 @@ where
         Ok(all)
     }
 
-    // pub async fn add_url_forward(&mut self, domain: &str, cmd: DomainAddForwardUrl) -> Result<()> {
-    //     self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
-    //         .await
-    // }
+    /// Add a new url forward to the given domain
+    pub async fn add_url_forward(&self, domain: &str, cmd: Forward) -> Result<(), Error<T::Error>> {
+        self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
+            .await
+    }
 
-    // pub async fn get_url_forward(&mut self, domain: &str) -> Result<Vec<Forward>> {
-    //     let resp: GetUrlForwardingResponse = self
-    //         .post_with_api_key(uri::get_url_forward(domain)?, ())
-    //         .await?;
-    //     Ok(resp.forwards)
-    // }
+    /// Get all the url forwards for a given domain
+    pub async fn get_url_forward(
+        &self,
+        domain: &str,
+    ) -> Result<Vec<ForwardWithID>, Error<T::Error>> {
+        let resp: GetUrlForwardingResponse = self
+            .post_with_api_key(uri::get_url_forward(domain)?, ())
+            .await?;
+        Ok(resp.forwards)
+    }
 
-    // pub async fn delete_url_forward(&mut self, domain: &str, id: &str) -> Result<()> {
-    //     self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
-    //         .await
-    // }
+    /// Delete a url forward with the given id from the given domain
+    pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
+        self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
+            .await
+    }
 
     /// Create a new DNS record for the given domain.
     /// Will fail if there already exists a record with the same name and type.

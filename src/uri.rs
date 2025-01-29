@@ -26,23 +26,23 @@ pub fn domain_list_all() -> hyper::Uri {
     hyper::Uri::from_static("https://api.porkbun.com/api/json/v3/domain/listAll")
 }
 
-// pub fn add_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
-//     Uri::try_from(format!(
-//         "https://api.porkbun.com/api/json/v3/domain/addUrlForward/{domain}"
-//     ))
-// }
+pub fn add_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
+    Uri::try_from(format!(
+        "https://api.porkbun.com/api/json/v3/domain/addUrlForward/{domain}"
+    ))
+}
 
-// pub fn get_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
-//     Uri::try_from(format!(
-//         "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
-//     ))
-// }
+pub fn get_url_forward(domain: &str) -> Result<Uri, InvalidUri> {
+    Uri::try_from(format!(
+        "https://api.porkbun.com/api/json/v3/domain/getUrlForwarding/{domain}"
+    ))
+}
 
-// pub fn delete_url_forward(domain: &str, record_id: &str) -> Result<Uri, InvalidUri> {
-//     Uri::try_from(format!(
-//         "https://api.porkbun.com/api/json/v3/domain/deleteUrlForward/{domain}/{record_id}"
-//     ))
-// }
+pub fn delete_url_forward(domain: &str, record_id: &str) -> Result<Uri, InvalidUri> {
+    Uri::try_from(format!(
+        "https://api.porkbun.com/api/json/v3/domain/deleteUrlForward/{domain}/{record_id}"
+    ))
+}
 
 pub fn create_dns_record(domain: &str) -> Result<Uri, InvalidUri> {
     Uri::try_from(format!(
