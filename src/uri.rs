@@ -1,4 +1,3 @@
-use crate::DnsRecordType;
 use hyper::{http::uri::InvalidUri, Uri};
 pub(crate) fn ping() -> Uri {
     Uri::from_static("https://api.porkbun.com/api/json/v3/ping")

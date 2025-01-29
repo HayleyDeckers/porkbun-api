@@ -354,4 +354,5 @@ mod default_impl {
     }
 }
 
+#[cfg(feature = "default-client")]
 pub use default_impl::*;
