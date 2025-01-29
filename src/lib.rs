@@ -256,7 +256,58 @@ pub struct Pricing {
     /// This field is undocumented by porkbun, but I included it anyways to let people filter out these TLDs.
     //todo: ask
     //undocumented field, helps filter out stupid handshake domains
-    pub special_type: Option<String>,
+    pub special_type: TldType,
+}
+
+impl Pricing {
+    /// returns true if this is a normal ICANN/IANA TLDs like .com, .engineering or .gay
+    pub fn is_icann(&self) -> bool {
+        self.special_type.is_icann()
+    }
+}
+
+/// Describes what registry a TLD belongs to.
+#[derive(Debug)]
+pub enum TldType {
+    /// The normal ICANN/IANA TLDs like .com, .engineering or .gay
+    /// you probably want one of these
+    Normal,
+    /// An [experimental blockchain protocol](https://porkbun.com/handshake).
+    Handshake,
+    /// An unknown registery.
+    ///
+    /// at the time of writting, porkbun only supports ICANN and Handshake, but this variant exists for future-proofing.
+    Other(String),
+}
+
+impl TldType {
+    /// returns true if this is a normal ICANN/IANA TLDs like .com, .engineering or .gay
+    pub fn is_icann(&self) -> bool {
+        if let Self::Normal = self {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TldType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let string_value = Option::<String>::deserialize(deserializer)?;
+        Ok(match string_value {
+            None => Self::Normal,
+            Some(s) => {
+                if s.eq_ignore_ascii_case("handshake") {
+                    Self::Handshake
+                } else {
+                    Self::Other(s)
+                }
+            }
+        })
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -471,8 +522,20 @@ where
         Ok(ping.your_ip)
     }
 
+    /// Get a mapping of available TLDs to their pricing structure, filtered to only include ICANN TLDs.
+    /// This method does not require authentication, and it will work with any [ApiKey].
+    pub async fn icann_domain_pricing(
+        &self,
+    ) -> Result<impl Iterator<Item = (String, Pricing)>, Error<T::Error>> {
+        let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
+        Ok(resp.pricing.into_iter().filter(|(_, v)| v.is_icann()))
+    }
+
     /// Get a mapping of available TLDs to their pricing structure.
     /// This method does not require authentication, and it will work with any [ApiKey].
+    ///
+    /// This method includes all TLDs, including special ones like handshake domains.
+    /// If you only want ICANN TLDs, and you probably do, use [icann_domain_pricing](Client::icann_domain_pricing) instead.
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>, Error<T::Error>> {
         let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
         Ok(resp.pricing)

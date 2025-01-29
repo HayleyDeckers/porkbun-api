@@ -53,6 +53,7 @@ pub mod yesno {
         })
     }
 
+    #[allow(dead_code)]
     pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
     where
         D: Deserializer<'de>,

@@ -4,10 +4,7 @@ async fn main() -> anyhow::Result<()> {
     let api_key = serde_json::from_reader(file)?;
     let client = porkbun_api::Client::new(api_key);
     println!("TLD: registration / renewal / transfer\n-------");
-    for (tld, pricing) in client.domain_pricing().await? {
-        if let Some("handshake") = pricing.special_type.as_deref() {
-            continue;
-        }
+    for (tld, pricing) in client.icann_domain_pricing().await? {
         println!(
             "{tld}: {} / {} / {}",
             pricing.registration, pricing.renewal, pricing.transfer
