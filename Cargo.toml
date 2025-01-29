@@ -1,7 +1,11 @@
 [package]
+authors = ["Hayley Deckers"]
 name = "porkbun-api"
 version = "1.0.0"
 edition = "2021"
+license-file = "LICENSE"
+description = "an async implementation of porkbun's domain management api."
+repository = "https://github.com/HayleyDeckers/porkbun-api"
 
 [features]
 default = ["default-client"]
