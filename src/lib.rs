@@ -188,17 +188,6 @@ impl<'a> CreateOrEditDnsRecord<'a> {
     }
 }
 
-//create, or edit with a domain/subdomain/type in the url.
-// maybe we want to merge this with the CreateOrEditDnsRecord into a single struct with an enum for giving identifier as either
-// a domain/id pair or domain/subdomain/type and picking the appropriate url/body in the client
-// #[derive(Serialize)]
-// struct EditDnsRecordByDomainTypeSubdomain<'a> {
-//     pub content: &'a str,
-//     /// The time to live in seconds for the record. The minimum and the default is 600 seconds.
-//     pub ttl: Option<u32>,
-//     pub prio: Option<u32>,
-// }
-
 //might be an integer actually but sometimes sends a string
 // so we opt to store it as a string just in case it can start with
 // a '0'
@@ -688,33 +677,6 @@ where
             .await
     }
 
-    // async fn edit_dns_record_for(
-    //     &mut self,
-    //     domain: &str,
-    //     record_type: DnsRecordType,
-    //     subdomain: Option<&str>,
-    //     cmd: EditDnsRecordByDomainTypeSubdomain<'_>,
-    // ) -> Result<()> {
-    //     self.post_with_api_key(
-    //         uri::edit_dns_record_for(domain, record_type, subdomain)?,
-    //         cmd,
-    //     )
-    //     .await
-    // }
-
-    // async fn delete_dns_record_for(
-    //     &mut self,
-    //     domain: &str,
-    //     record_type: DnsRecordType,
-    //     subdomain: Option<&str>,
-    // ) -> Result<()> {
-    //     self.post_with_api_key(
-    //         uri::delete_dns_record_for(domain, record_type, subdomain)?,
-    //         (),
-    //     )
-    //     .await
-    // }
-
     /// Deletes an existing DNS record for a given domain, by its unique ID.
     /// IDs can be discovered by first calling [get_all](Client::get_all).
     pub async fn delete(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
@@ -742,17 +704,6 @@ where
         let rsp = rsp.records.into_iter().next();
         Ok(rsp)
     }
-    // async fn get_dns_record_for(
-    //     &mut self,
-    //     domain: &str,
-    //     record_type: DnsRecordType,
-    //     subdomain: Option<&str>,
-    // ) -> Result<Vec<DnsEntry>> {
-    //     let rsp: DnsRecordsByDomainOrIDResponse = self
-    //         .post_with_api_key(uri::get_dns_record_for(domain, record_type, subdomain)?, ())
-    //         .await?;
-    //     Ok(rsp.records)
-    // }
 
     /// Get the SSL certificate bundle for a given domain
     pub async fn get_ssl_bundle(&mut self, domain: &str) -> Result<SslBundle, Error<T::Error>> {
