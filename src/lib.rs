@@ -563,15 +563,6 @@ where
         Ok(ping.your_ip)
     }
 
-    /// Get a mapping of available TLDs to their pricing structure, filtered to only include ICANN TLDs.
-    /// This method does not require authentication, and it will work with any [ApiKey].
-    pub async fn icann_domain_pricing(
-        &self,
-    ) -> Result<impl Iterator<Item = (String, Pricing)>, Error<T::Error>> {
-        let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
-        Ok(resp.pricing.into_iter().filter(|(_, v)| v.is_icann()))
-    }
-
     /// Get a mapping of available TLDs to their pricing structure.
     /// This method does not require authentication, and it will work with any [ApiKey].
     ///
@@ -582,25 +573,13 @@ where
         Ok(resp.pricing)
     }
 
-    /// Updates the nameservers for a particular domain
-    pub async fn update_nameservers(
+    /// Get a mapping of available TLDs to their pricing structure, filtered to only include ICANN TLDs.
+    /// This method does not require authentication, and it will work with any [ApiKey].
+    pub async fn icann_domain_pricing(
         &self,
-        domain: &str,
-        name_servers: Vec<String>,
-    ) -> Result<(), Error<T::Error>> {
-        self.post_with_api_key(
-            uri::update_name_servers(domain)?,
-            UpdateNameServers { ns: name_servers },
-        )
-        .await
-    }
-
-    /// Gets the configured nameservers for a particular domain
-    pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>, Error<T::Error>> {
-        let resp: UpdateNameServers = self
-            .post_with_api_key(uri::get_name_servers(domain)?, ())
-            .await?;
-        Ok(resp.ns)
+    ) -> Result<impl Iterator<Item = (String, Pricing)>, Error<T::Error>> {
+        let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
+        Ok(resp.pricing.into_iter().filter(|(_, v)| v.is_icann()))
     }
 
     async fn list_domains(&self, offset: usize) -> Result<Vec<DomainInfo>, Error<T::Error>> {
@@ -629,27 +608,25 @@ where
         Ok(all)
     }
 
-    /// Add a new url forward to the given domain
-    pub async fn add_url_forward(&self, domain: &str, cmd: Forward) -> Result<(), Error<T::Error>> {
-        self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
-            .await
+    /// Gets all the DNS records for a given domain
+    pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>, Error<T::Error>> {
+        let rsp: DnsRecordsByDomainOrIDResponse = self
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
+            .await?;
+        Ok(rsp.records)
     }
 
-    /// Get all the url forwards for a given domain
-    pub async fn get_url_forwards(
+    /// Gets a single DNS record for a given domain, by its unique ID.
+    pub async fn get_single(
         &self,
         domain: &str,
-    ) -> Result<Vec<ForwardWithID>, Error<T::Error>> {
-        let resp: GetUrlForwardingResponse = self
-            .post_with_api_key(uri::get_url_forward(domain)?, ())
+        id: &str,
+    ) -> Result<Option<DnsEntry>, Error<T::Error>> {
+        let rsp: DnsRecordsByDomainOrIDResponse = self
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(&domain, Some(id))?, ())
             .await?;
-        Ok(resp.forwards)
-    }
-
-    /// Delete a url forward with the given id from the given domain
-    pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
-        self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
-            .await
+        let rsp = rsp.records.into_iter().next();
+        Ok(rsp)
     }
 
     /// Create a new DNS record for the given domain.
@@ -684,25 +661,48 @@ where
             .await
     }
 
-    /// Gets all the DNS records for a given domain
-    pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>, Error<T::Error>> {
-        let rsp: DnsRecordsByDomainOrIDResponse = self
-            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
+    /// Gets the configured nameservers for a particular domain
+    pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>, Error<T::Error>> {
+        let resp: UpdateNameServers = self
+            .post_with_api_key(uri::get_name_servers(domain)?, ())
             .await?;
-        Ok(rsp.records)
+        Ok(resp.ns)
     }
 
-    /// Gets a single DNS record for a given domain, by its unique ID.
-    pub async fn get_single(
+    /// Updates the nameservers for a particular domain
+    pub async fn update_nameservers(
         &self,
         domain: &str,
-        id: &str,
-    ) -> Result<Option<DnsEntry>, Error<T::Error>> {
-        let rsp: DnsRecordsByDomainOrIDResponse = self
-            .post_with_api_key(uri::get_dns_record_by_domain_and_id(&domain, Some(id))?, ())
+        name_servers: Vec<String>,
+    ) -> Result<(), Error<T::Error>> {
+        self.post_with_api_key(
+            uri::update_name_servers(domain)?,
+            UpdateNameServers { ns: name_servers },
+        )
+        .await
+    }
+
+    /// Get all the url forwards for a given domain
+    pub async fn get_url_forwards(
+        &self,
+        domain: &str,
+    ) -> Result<Vec<ForwardWithID>, Error<T::Error>> {
+        let resp: GetUrlForwardingResponse = self
+            .post_with_api_key(uri::get_url_forward(domain)?, ())
             .await?;
-        let rsp = rsp.records.into_iter().next();
-        Ok(rsp)
+        Ok(resp.forwards)
+    }
+
+    /// Add a new url forward to the given domain
+    pub async fn add_url_forward(&self, domain: &str, cmd: Forward) -> Result<(), Error<T::Error>> {
+        self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
+            .await
+    }
+
+    /// Delete a url forward with the given id from the given domain
+    pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
+        self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
+            .await
     }
 
     /// Get the SSL certificate bundle for a given domain
