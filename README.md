@@ -6,10 +6,10 @@
 [![MIT licensed][mit-badge]][mit-url]
 
 this crate provides an async implementation of [porkbun](https://porkbun.com)'s domain management [api](https://porkbun.com/api/json/v3/documentation).
-It provides a transport-agnostic [Client], and a [DefaultTransport] based on hyper suitable for use in tokio-based applications.
+It provides a transport-agnostic Client, and a default transport layer based on hyper suitable for use in tokio-based applications.
 
-[docs-badge]: [https://img.shields.io/docsrs/porkbun-api]
-[docs-url]: [https://docs.rs/porkbun-api]
+[docs-badge]: https://img.shields.io/docsrs/porkbun-api
+[docs-url]: https://docs.rs/porkbun-api
 [crates-badge]: https://img.shields.io/crates/v/porkbun-api.svg
 [crates-url]: https://crates.io/crates/porkbun-api
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
