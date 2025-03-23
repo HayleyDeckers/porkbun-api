@@ -115,12 +115,13 @@ mod default_impl {
         ) -> impl Future<Output = Result<Response<Self::Body>, Self::Error>> {
             async {
                 let mut lock = self.send.lock().await;
-                if lock.is_none() {
+                if lock.is_none() || lock.as_ref().is_some_and(|l| l.is_closed()) {
                     let conn = self.make_connection().await?;
                     *lock = Some(conn)
                 }
-                lock.as_mut()
-                    .unwrap()
+                let sender = lock.as_mut().unwrap();
+                sender.ready().await?;
+                sender
                     .send_request(request)
                     .await
                     .map_err(DefaultTransportError::from)
