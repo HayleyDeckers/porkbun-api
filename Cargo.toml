@@ -6,6 +6,8 @@ edition = "2021"
 license-file = "LICENSE"
 description = "an async implementation of porkbun's domain management api."
 repository = "https://github.com/HayleyDeckers/porkbun-api"
+keywords = ["dns", "porkbun", "api", "async"]
+categories = ["api-bindings", "web-programming::http-client"]
 
 [features]
 default = ["default-client"]
