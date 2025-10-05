@@ -61,7 +61,7 @@ jobs:
             timeout: 10
             command: |
               cargo install cargo-semver-checks --locked --version ^0.44
-              cargo semver-checks --baseline main --generate-baseline 
+              cargo semver-checks --baseline-rev main 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
