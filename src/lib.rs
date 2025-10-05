@@ -1,8 +1,6 @@
 #![warn(missing_docs)]
 //! # porkbun-api
 //! 
-//! Test comment for semver check
-//!
 //! this crate provides an async implementation of [porkbun](https://porkbun.com)'s domain management [api](https://porkbun.com/api/json/v3/documentation).
 //! It provides a transport-agnostic [Client], and a [DefaultTransport] based on hyper suitable for use in tokio-based applications.
 //!
