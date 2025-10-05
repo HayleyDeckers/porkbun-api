@@ -54,10 +54,21 @@ jobs:
             timeout: 5
             command: |
               cargo install taplo-cli --locked --version ^0.8
-              taplo format --check 
+              taplo format --check
+          - job: cargo-semver-checks
+            toolchain: stable
+            timeout: 10
+            command: |
+              cargo install cargo-semver-checks --locked --version ^0.44
+              cargo semver-checks --check --baseline main 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch main branch
+        if: matrix.job == 'cargo-semver-checks'
+        run: git fetch origin main
       - name: Install Rust (stable)
         if: matrix.toolchain == 'stable'
         uses: dtolnay/rust-toolchain@stable
@@ -69,4 +80,5 @@ jobs:
         with:
           cache-on-failure: true
       - name: Run ${{ matrix.job }}
+        if: ${{ matrix.job == 'cargo-semver-checks' && github.event_name == 'pull_request' || matrix.job != 'cargo-semver-checks' }}
         run: ${{ matrix.command }}
