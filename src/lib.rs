@@ -7,10 +7,13 @@
 //! ## example
 //!
 //! ```
+//! use porkbun_api::{Client, ApiKey, CreateOrEditDnsRecord};
+//! use porkbun_api::transport::DefaultTransportError;
+//!
 //! #[tokio::main]
-//! async fn main() -> porkbun_api::Result<()> {
-//!     let api_key = porkbun_api::ApiKey::new("secret", "api_key");
-//!     let client = porkbun_api::Client::new(api_key);
+//! async fn main() -> Result<(), porkbun_api::Error<DefaultTransportError>> {
+//!     let api_key = ApiKey::new("secret", "api_key");
+//!     let client = Client::new(api_key);
 //!
 //!     let domain = &client.domains().await?[0].domain;
 //!     let subdomain = Some("my.ip");
@@ -272,11 +275,7 @@ pub enum TldType {
 impl TldType {
     /// returns true if this is a normal ICANN/IANA TLDs like .com, .engineering or .gay
     pub fn is_icann(&self) -> bool {
-        if let Self::Normal = self {
-            true
-        } else {
-            false
-        }
+        matches!(self, Self::Normal)
     }
 }
 
@@ -529,7 +528,7 @@ where
             .to_bytes();
         let result = std::result::Result::<_, ApiErrorMessage>::from(
             serde_json::from_slice::<ApiResponse<_>>(&bytes)
-                .map_err(|e| ErrorImpl::DeserializationError(e))?,
+                .map_err(ErrorImpl::DeserializationError)?,
         );
 
         match (head.status, result) {
@@ -546,8 +545,7 @@ where
             api_key: &self.api_key,
             inner: body,
         };
-        let json =
-            serde_json::to_string(&with_api_key).map_err(|e| ErrorImpl::SerializationError(e))?;
+        let json = serde_json::to_string(&with_api_key).map_err(ErrorImpl::SerializationError)?;
         let body = http_body_util::Full::new(Bytes::from(json));
         self.post(uri, body).await
     }
@@ -623,7 +621,7 @@ where
         id: &str,
     ) -> Result<Option<DnsEntry>, Error<T::Error>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
-            .post_with_api_key(uri::get_dns_record_by_domain_and_id(&domain, Some(id))?, ())
+            .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, Some(id))?, ())
             .await?;
         let rsp = rsp.records.into_iter().next();
         Ok(rsp)
