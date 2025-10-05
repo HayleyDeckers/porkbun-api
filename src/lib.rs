@@ -6,7 +6,7 @@
 //!
 //! ## example
 //!
-//! ```
+//! ```no_run
 //! use porkbun_api::{Client, ApiKey, CreateOrEditDnsRecord};
 //! use porkbun_api::transport::DefaultTransportError;
 //!
