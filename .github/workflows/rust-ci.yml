@@ -13,6 +13,7 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     continue-on-error: ${{ matrix.job == 'cargo-outdated' || matrix.job == 'cargo-udeps' || matrix.job == 'cargo-deny' }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - job: rustfmt
