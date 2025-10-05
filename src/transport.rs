@@ -37,7 +37,6 @@ mod default_impl {
     use std::{
         error::Error,
         fmt::{Debug, Display},
-        future::Future,
         sync::Arc,
         time::Duration,
     };
@@ -109,23 +108,21 @@ mod default_impl {
     impl MakeRequest for Http2Only {
         type Body = Incoming;
         type Error = DefaultTransportError;
-        fn request(
+        async fn request(
             &self,
             request: Request<Full<Bytes>>,
-        ) -> impl Future<Output = Result<Response<Self::Body>, Self::Error>> {
-            async {
-                let mut lock = self.send.lock().await;
-                if lock.is_none() || lock.as_ref().is_some_and(|l| l.is_closed()) {
-                    let conn = self.make_connection().await?;
-                    *lock = Some(conn)
-                }
-                let sender = lock.as_mut().unwrap();
-                sender.ready().await?;
-                sender
-                    .send_request(request)
-                    .await
-                    .map_err(DefaultTransportError::from)
+        ) -> Result<Response<Self::Body>, Self::Error> {
+            let mut lock = self.send.lock().await;
+            if lock.is_none() || lock.as_ref().is_some_and(|l| l.is_closed()) {
+                let conn = self.make_connection().await?;
+                *lock = Some(conn)
             }
+            let sender = lock.as_mut().unwrap();
+            sender.ready().await?;
+            sender
+                .send_request(request)
+                .await
+                .map_err(DefaultTransportError::from)
         }
     }
 
@@ -159,13 +156,11 @@ mod default_impl {
                 let resp = self.inner.request(request.clone()).await?;
                 if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
                     break resp;
+                } else if slept >= max_sleep {
+                    return Err(DefaultTransportError(DefaultTransportErrorImpl::RetryError));
                 } else {
-                    if slept >= max_sleep {
-                        return Err(DefaultTransportError(DefaultTransportErrorImpl::RetryError));
-                    } else {
-                        slept += 1;
-                        tokio::time::sleep(sleep_time).await
-                    }
+                    slept += 1;
+                    tokio::time::sleep(sleep_time).await
                 }
             };
             Ok(resp)
@@ -290,6 +285,7 @@ mod default_impl {
         }
     }
 
+    #[allow(clippy::enum_variant_names)]
     #[derive(Debug)]
     enum DefaultTransportErrorImpl {
         ConnectionError(std::io::Error),

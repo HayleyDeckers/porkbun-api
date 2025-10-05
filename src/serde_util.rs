@@ -82,7 +82,7 @@ pub mod stringoneintzero {
         match &str_or_int {
             PossibleValues::Stringy(x) if x == "1" => Ok(true),
             PossibleValues::Inty(0) => Ok(false),
-            x => Err(serde::de::Error::custom(&format!("invalid value {x:?}"))),
+            x => Err(serde::de::Error::custom(format!("invalid value {x:?}"))),
         }
     }
 }
@@ -95,6 +95,6 @@ pub mod datetime {
         D: Deserializer<'de>,
     {
         NaiveDateTime::parse_from_str(&String::deserialize(deserializer)?, "%Y-%m-%d %H:%M:%S")
-            .map_err(|e| Error::custom(&format!("failed to parse datetime: {e}")))
+            .map_err(|e| Error::custom(format!("failed to parse datetime: {e}")))
     }
 }

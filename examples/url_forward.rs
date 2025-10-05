@@ -8,12 +8,12 @@ async fn main() -> anyhow::Result<()> {
     let domain = &client.domains().await?[0].domain;
 
     let cmd = Forward::new(Some("url_forward"), "example.com");
-    client.add_url_forward(&domain, cmd).await?;
+    client.add_url_forward(domain, cmd).await?;
     let url_forwards = client.get_url_forwards(domain).await?;
     for url in url_forwards {
         println!("{:#?}", url);
         let id = &url.id;
-        client.delete_url_forward(&domain, &id).await?;
+        client.delete_url_forward(domain, id).await?;
         println!("removed url forward {id}");
     }
 
