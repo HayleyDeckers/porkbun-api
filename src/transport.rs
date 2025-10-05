@@ -87,6 +87,7 @@ mod default_impl {
 
             let mut config = rustls::ClientConfig::builder()
                 .with_platform_verifier()
+                .expect("Failed to create platform verifier")
                 .with_no_client_auth();
             config.alpn_protocols = vec![b"h2".into()];
             let config = Arc::new(config);

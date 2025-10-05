@@ -1,7 +1,7 @@
 [package]
 authors = ["Hayley Deckers"]
 name = "porkbun-api"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 license-file = "LICENSE"
 description = "an async implementation of porkbun's domain management api."
@@ -32,10 +32,11 @@ hyper = { version = "1", features = ["client", "http2"] }
 hyper-util = { version = "0.1.5", features = ["tokio"], optional = true }
 tokio = { version = "1.40.0", default-features = false, features = [
   "time",
+  "net",
 ], optional = true }
 rustls = { version = "0.23.20", optional = true }
 tokio-rustls = { version = "0.26.1", optional = true }
-rustls-platform-verifier = { version = "0.5.0", optional = true }
+rustls-platform-verifier = { version = "0.6.1", optional = true }
 cookie = { version = "0.18.1", optional = true }
 
 
