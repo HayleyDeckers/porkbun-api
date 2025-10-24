@@ -38,7 +38,6 @@
 //!
 //! Also, the porkbun api server can also be quite slow, sometimes taking several seconds before it accepts an api call. Keep this in mind when integrating this library within a larger application.
 
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
 mod serde_util;
 
 pub mod transport;
