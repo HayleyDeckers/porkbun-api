@@ -1,23 +1,22 @@
 //! HTTP transport layer traits and implementations
-use http_body_util::Full;
 use hyper::body::Body;
-use hyper::{body::Bytes, Request, Response};
+use hyper::{Request, Response};
 
 use std::future::Future;
 
 /// A trait representing an HTTP request-response action. This trait needs to be implemented by a type in order to be used as a transport layer by the [Client](crate::Client).
-pub trait MakeRequest: Sized {
+pub trait MakeRequest<RequestBody: Body>: Sized {
     /// The HTTP body type of the returned response.
     /// In order for a type to be useable as a transport layer for the [Client](crate::Client)
     /// `Body::Error` has to implement `Into<Self::Error>`.
-    type Body: Body;
+    type ResponseBody: Body;
     /// The error type this interface can return
     type Error: std::error::Error + Send + Sync + 'static;
     /// Perform an HTTP request, returning a response asynchronously.
     fn request(
         &self,
-        request: Request<Full<Bytes>>,
-    ) -> impl Future<Output = std::result::Result<Response<Self::Body>, Self::Error>>;
+        request: Request<RequestBody>,
+    ) -> impl Future<Output = std::result::Result<Response<Self::ResponseBody>, Self::Error>>;
 }
 
 #[cfg(feature = "default-client")]
@@ -26,11 +25,10 @@ mod default_impl {
     use cookie::time::OffsetDateTime;
     use cookie::{Cookie, CookieJar};
     use http_body_util::Full;
-    use hyper::client::conn::http2::Builder as Http2Builder;
+    use hyper::{body::Incoming, client::conn::http2::SendRequest, Request, Response, StatusCode};
     use hyper::{
-        body::{Bytes, Incoming},
-        client::conn::http2::SendRequest,
-        Request, Response, StatusCode,
+        body::{Body, Bytes},
+        client::conn::http2::Builder as Http2Builder,
     };
     use hyper_util::rt::{TokioExecutor, TokioIo};
     use rustls::ClientConfig;
@@ -46,14 +44,19 @@ mod default_impl {
     };
     use tokio_rustls::TlsConnector;
 
-    struct Http2Only {
+    struct Http2Only<RequestBody: Body> {
         force_ipv4: bool,
         config: Arc<ClientConfig>,
-        send: tokio::sync::Mutex<Option<SendRequest<Full<Bytes>>>>,
+        send: tokio::sync::Mutex<Option<SendRequest<RequestBody>>>,
     }
 
-    impl Http2Only {
-        async fn make_connection(&self) -> Result<SendRequest<Full<Bytes>>, DefaultTransportError> {
+    impl<RequestBody: Body> Http2Only<RequestBody>
+    where
+        RequestBody: Send + 'static + Unpin,
+        RequestBody::Data: Send + 'static,
+        RequestBody::Error: Error + Send + Sync + 'static,
+    {
+        async fn make_connection(&self) -> Result<SendRequest<RequestBody>, DefaultTransportError> {
             let arc_config = self.config.clone();
             let server_name = if self.force_ipv4 {
                 "api-ipv4.porkbun.com"
@@ -100,19 +103,26 @@ mod default_impl {
         }
     }
 
-    impl Default for Http2Only {
+    impl<RequestBody: Body> Default for Http2Only<RequestBody>
+    where
+        RequestBody: Send + 'static + Unpin,
+        RequestBody::Data: Send + 'static,
+        RequestBody::Error: Error + Send + Sync + 'static,
+    {
         fn default() -> Self {
             Self::new(false)
         }
     }
 
-    impl MakeRequest for Http2Only {
-        type Body = Incoming;
+    impl<B: Body> MakeRequest<B> for Http2Only<B>
+    where
+        B: Send + 'static + Unpin,
+        B::Data: Send + 'static,
+        B::Error: Error + Send + Sync + 'static,
+    {
+        type ResponseBody = Incoming;
         type Error = DefaultTransportError;
-        async fn request(
-            &self,
-            request: Request<Full<Bytes>>,
-        ) -> Result<Response<Self::Body>, Self::Error> {
+        async fn request(&self, request: Request<B>) -> Result<Response<Incoming>, Self::Error> {
             let mut lock = self.send.lock().await;
             if lock.is_none() || lock.as_ref().is_some_and(|l| l.is_closed()) {
                 let conn = self.make_connection().await?;
@@ -128,26 +138,26 @@ mod default_impl {
     }
 
     #[derive(Clone)]
-    struct Retry502<T: MakeRequest> {
+    struct Retry502<T> {
         inner: T,
     }
 
-    impl<T: MakeRequest> Retry502<T> {
+    impl<T> Retry502<T> {
         fn wrapping(inner: T) -> Self {
             Self { inner }
         }
     }
 
-    impl<E, T: MakeRequest<Error = E>> MakeRequest for Retry502<T>
+    impl<B: Body + Clone, T: MakeRequest<B>> MakeRequest<B> for Retry502<T>
     where
-        DefaultTransportError: From<E>,
+        DefaultTransportError: From<T::Error>,
     {
-        type Body = T::Body;
+        type ResponseBody = T::ResponseBody;
         type Error = DefaultTransportError;
         async fn request(
             &self,
-            request: Request<Full<Bytes>>,
-        ) -> Result<Response<Self::Body>, Self::Error> {
+            request: Request<B>,
+        ) -> Result<Response<Self::ResponseBody>, Self::Error> {
             let sleep_time = Duration::from_millis(250);
             //would be better if this was a timeout wrapper
             let max_sleep = 10;
@@ -188,7 +198,7 @@ mod default_impl {
         }
 
         /// Checks if a cookie is valid for the given request.
-        fn is_cookie_valid_for_request(cookie: &Cookie, request: &Request<Full<Bytes>>) -> bool {
+        fn is_cookie_valid_for_request<B: Body>(cookie: &Cookie, request: &Request<B>) -> bool {
             // Check domain
             if let Some(domain) = cookie.domain() {
                 if !request.uri().host().unwrap_or("").ends_with(domain) {
@@ -210,14 +220,14 @@ mod default_impl {
             true
         }
     }
-    impl<T: MakeRequest> MakeRequest for TrackCookies<T> {
-        type Body = T::Body;
+    impl<B: Body, T: MakeRequest<B>> MakeRequest<B> for TrackCookies<T> {
+        type ResponseBody = T::ResponseBody;
         type Error = T::Error;
         /// Makes a request, adding cookies to the request and extracting cookies from the response.
         async fn request(
             &self,
-            mut request: Request<Full<Bytes>>,
-        ) -> Result<Response<T::Body>, T::Error> {
+            mut request: Request<B>,
+        ) -> Result<Response<T::ResponseBody>, T::Error> {
             // Add cookies to the request
             let cookie_header = {
                 let jar = self.cookie_jar.read().await;
@@ -266,7 +276,7 @@ mod default_impl {
     /// and will retry requests if it receives a response with a 502 statuscode every 250ms, up to a maximum of 10 times.
     ///
     /// this implementation is subject to change in a minor release.
-    pub struct DefaultTransport(Retry502<TrackCookies<Http2Only>>);
+    pub struct DefaultTransport(Retry502<TrackCookies<Http2Only<Full<Bytes>>>>);
 
     impl Default for DefaultTransport {
         fn default() -> Self {
@@ -340,13 +350,13 @@ mod default_impl {
         }
     }
 
-    impl MakeRequest for DefaultTransport {
-        type Body = Incoming;
+    impl MakeRequest<Full<Bytes>> for DefaultTransport {
+        type ResponseBody = Incoming;
         type Error = DefaultTransportError;
         async fn request(
             &self,
             request: Request<Full<Bytes>>,
-        ) -> Result<Response<Self::Body>, Self::Error> {
+        ) -> Result<Response<Self::ResponseBody>, Self::Error> {
             self.0.request(request).await
         }
     }
