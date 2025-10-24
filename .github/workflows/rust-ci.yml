@@ -23,6 +23,11 @@ jobs:
             toolchain: stable
             timeout: 15
             command: cargo clippy --all-targets --all-features -- -D warnings
+          - job: docs-rs
+            toolchain: nightly
+            timeout: 10
+            command: |
+              cargo docs-rs
           - job: build
             toolchain: stable
             timeout: 15
@@ -54,16 +59,21 @@ jobs:
             timeout: 5
             command: |
               cargo install taplo-cli --locked --version ^0.8
-              taplo format --check 
+              taplo format --check
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Install Rust (stable)
         if: matrix.toolchain == 'stable'
         uses: dtolnay/rust-toolchain@stable
       - name: Install Rust (nightly)
         if: matrix.toolchain == 'nightly'
         uses: dtolnay/rust-toolchain@nightly
+      - name: Use docs-rs toolchain
+        if: matrix.job == 'docs-rs'
+        uses: dtolnay/install@cargo-docs-rs
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
