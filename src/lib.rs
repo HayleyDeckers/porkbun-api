@@ -479,7 +479,7 @@ struct WithApiKeys<'a, T: Serialize> {
 }
 
 /// A client for interfacing with the Porkbun API servers
-pub struct Client<P: MakeRequest> {
+pub struct Client<P: MakeRequest<Full<Bytes>>> {
     inner: P,
     api_key: ApiKey,
 }
@@ -496,8 +496,8 @@ impl Client<DefaultTransport> {
 
 impl<T> Client<T>
 where
-    T: MakeRequest,
-    <T::Body as Body>::Error: Into<T::Error>,
+    T: MakeRequest<Full<Bytes>>,
+    <T::ResponseBody as Body>::Error: Into<T::Error>,
 {
     /// creates a new client using the supplied api key and transport.
     ///
