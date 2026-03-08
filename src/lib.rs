@@ -30,6 +30,11 @@
 //! ## Features
 //!
 //! - `default-client` enabled by default. Includes a default transport layer implementation for the [Client]. This can be disabled if you are implementing your own.
+//! - `tracing` optional. When enabled, adds `#[instrument]` spans on all public API methods
+//!   and emits events in the Default transport layer.
+//!   HTTP-level request/response tracing is intentionally omitted — if you need it,
+//!   wrap [`DefaultTransport`] in your own [`MakeRequest`](transport::MakeRequest)
+//!   implementation that adds spans. See `examples/http_tracing.rs` for a working example.
 //!
 //! ## known issues with the porkbun api
 //!
@@ -550,6 +555,7 @@ where
     }
 
     /// pings the api servers returning your ip address.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn ping(&self) -> Result<IpAddr, Error<T::Error>> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
@@ -565,6 +571,7 @@ where
     ///
     /// This method includes all TLDs, including special ones like handshake domains.
     /// If you only want ICANN TLDs, and you probably do, use [icann_domain_pricing](Client::icann_domain_pricing) instead.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn domain_pricing(&self) -> Result<HashMap<String, Pricing>, Error<T::Error>> {
         let resp: DomainPricingResponse = self.post(uri::domain_pricing(), Full::default()).await?;
         Ok(resp.pricing)
@@ -572,6 +579,7 @@ where
 
     /// Get a mapping of available TLDs to their pricing structure, filtered to only include ICANN TLDs.
     /// This method does not require authentication, and it will work with any [ApiKey].
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn icann_domain_pricing(
         &self,
     ) -> Result<impl Iterator<Item = (String, Pricing)>, Error<T::Error>> {
@@ -593,6 +601,7 @@ where
     }
 
     /// get all the domains associated with this account
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn domains(&self) -> Result<Vec<DomainInfo>, Error<T::Error>> {
         let mut all = self.list_domains(0).await?;
         let mut last_len = all.len();
@@ -606,6 +615,7 @@ where
     }
 
     /// Gets all the DNS records for a given domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn get_all(&self, domain: &str) -> Result<Vec<DnsEntry>, Error<T::Error>> {
         let rsp: DnsRecordsByDomainOrIDResponse = self
             .post_with_api_key(uri::get_dns_record_by_domain_and_id(domain, None)?, ())
@@ -614,6 +624,7 @@ where
     }
 
     /// Gets a single DNS record for a given domain, by its unique ID.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn get_single(
         &self,
         domain: &str,
@@ -628,6 +639,7 @@ where
 
     /// Create a new DNS record for the given domain.
     /// Will fail if there already exists a record with the same name and type.
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn create(
         &self,
         domain: &str,
@@ -641,6 +653,7 @@ where
 
     /// Edits an existing DNS record for a given domain, by its unique ID.
     /// IDs can be discovered by first calling [get_all](Client::get_all).
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn edit(
         &self,
         domain: &str,
@@ -653,12 +666,14 @@ where
 
     /// Deletes an existing DNS record for a given domain, by its unique ID.
     /// IDs can be discovered by first calling [get_all](Client::get_all).
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn delete(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::delete_dns_record_by_id(domain, id)?, ())
             .await
     }
 
     /// Gets the configured nameservers for a particular domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn nameservers(&self, domain: &str) -> Result<Vec<String>, Error<T::Error>> {
         let resp: UpdateNameServers = self
             .post_with_api_key(uri::get_name_servers(domain)?, ())
@@ -667,6 +682,7 @@ where
     }
 
     /// Updates the nameservers for a particular domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn update_nameservers(
         &self,
         domain: &str,
@@ -680,6 +696,7 @@ where
     }
 
     /// Get all the url forwards for a given domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn get_url_forwards(
         &self,
         domain: &str,
@@ -691,18 +708,21 @@ where
     }
 
     /// Add a new url forward to the given domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn add_url_forward(&self, domain: &str, cmd: Forward) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::add_url_forward(domain)?, cmd)
             .await
     }
 
     /// Delete a url forward with the given id from the given domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn delete_url_forward(&self, domain: &str, id: &str) -> Result<(), Error<T::Error>> {
         self.post_with_api_key(uri::delete_url_forward(domain, id)?, ())
             .await
     }
 
     /// Get the SSL certificate bundle for a given domain
+    #[cfg_attr(feature = "tracing", tracing::instrument(skip(self)))]
     pub async fn get_ssl_bundle(&mut self, domain: &str) -> Result<SslBundle, Error<T::Error>> {
         self.post_with_api_key(uri::get_ssl_bundle(domain)?, ())
             .await

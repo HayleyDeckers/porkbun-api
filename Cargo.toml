@@ -1,9 +1,9 @@
 [package]
 authors = ["Hayley Deckers"]
 name = "porkbun-api"
-version = "1.0.3"
+version = "1.0.4"
 edition = "2021"
-license-file = "MIT"
+license = "MIT"
 description = "an async implementation of porkbun's domain management api."
 repository = "https://github.com/HayleyDeckers/porkbun-api"
 keywords = ["dns", "porkbun", "api", "async"]
@@ -19,6 +19,7 @@ default-client = [
   "dep:rustls-platform-verifier",
   "dep:cookie",
 ]
+tracing = ["dep:tracing"]
 
 [dependencies]
 serde = { version = "1.0.203", features = ["derive"] }
@@ -38,6 +39,7 @@ rustls = { version = "0.23.20", optional = true }
 tokio-rustls = { version = "0.26.1", optional = true }
 rustls-platform-verifier = { version = "0.6.1", optional = true }
 cookie = { version = "0.18.1", optional = true }
+tracing = { version = "0.1", optional = true }
 
 
 [dev-dependencies]
@@ -48,6 +50,8 @@ tokio = { version = "1.40.0", features = [
   "time",
   "rt-multi-thread",
 ] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [package.metadata.docs.rs]
 all-features = true

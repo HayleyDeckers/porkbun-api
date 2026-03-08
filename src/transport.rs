@@ -54,14 +54,15 @@ mod default_impl {
 
     impl Http2Only {
         async fn make_connection(&self) -> Result<SendRequest<Full<Bytes>>, DefaultTransportError> {
-            let arc_config = self.config.clone();
-            let server_name = if self.force_ipv4 {
+            let host = if self.force_ipv4 {
                 "api-ipv4.porkbun.com"
             } else {
                 "api.porkbun.com"
-            }
-            .try_into()
-            .unwrap();
+            };
+            #[cfg(feature = "tracing")]
+            tracing::debug!(target: "porkbun_api::transport", "connecting to {}", host);
+            let arc_config = self.config.clone();
+            let server_name = host.try_into().unwrap();
             let tokio_tls_connecto = TlsConnector::from(arc_config);
             let tcp = TcpStream::connect(if self.force_ipv4 {
                 "api-ipv4.porkbun.com:443"
@@ -79,6 +80,8 @@ mod default_impl {
             let (send, conn) = Http2Builder::new(TokioExecutor::new())
                 .handshake(hyper_io)
                 .await?;
+            #[cfg(feature = "tracing")]
+            tracing::debug!(target: "porkbun_api::transport", "connection established");
             tokio::spawn(conn);
             Ok(send)
         }
@@ -115,6 +118,8 @@ mod default_impl {
         ) -> Result<Response<Self::Body>, Self::Error> {
             let mut lock = self.send.lock().await;
             if lock.is_none() || lock.as_ref().is_some_and(|l| l.is_closed()) {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(target: "porkbun_api::transport", "connection closed or not established, reconnecting");
                 let conn = self.make_connection().await?;
                 *lock = Some(conn)
             }
@@ -158,9 +163,13 @@ mod default_impl {
                 if resp.status() != StatusCode::SERVICE_UNAVAILABLE {
                     break resp;
                 } else if slept >= max_sleep {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!(target: "porkbun_api::transport", "retry limit reached after {} attempts", max_sleep);
                     return Err(DefaultTransportError(DefaultTransportErrorImpl::RetryError));
                 } else {
                     slept += 1;
+                    #[cfg(feature = "tracing")]
+                    tracing::info!(target: "porkbun_api::transport", "received 502, retrying (attempt {}/{}).", slept, max_sleep);
                     tokio::time::sleep(sleep_time).await
                 }
             };
@@ -232,6 +241,8 @@ mod default_impl {
             };
 
             if !cookie_header.is_empty() {
+                #[cfg(feature = "tracing")]
+                tracing::trace!(target: "porkbun_api::transport", "added {} cookies to request", cookie_header.split("; ").count());
                 request
                     .headers_mut()
                     .insert(hyper::header::COOKIE, cookie_header.parse().unwrap());
@@ -250,6 +261,8 @@ mod default_impl {
 
             // Extract cookies from the response
             if !cookies.is_empty() {
+                #[cfg(feature = "tracing")]
+                tracing::trace!(target: "porkbun_api::transport", "stored {} cookies from response", cookies.len());
                 let mut jar = self.cookie_jar.write().await;
                 for cookie in cookies {
                     jar.add(cookie.into_owned());
